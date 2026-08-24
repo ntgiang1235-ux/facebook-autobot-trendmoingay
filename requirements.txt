@@ -1,0 +1,7 @@
+requests
+urllib3
+Pillow
+google-genai
+python-dotenv
+beautifulsoup4
+libsql

@@ -1,0 +1,6 @@
+.env
+.venv/
+bot_memory.db
+summary.jpg
+__pycache__/
+*.pyc
