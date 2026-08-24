@@ -2,5 +2,6 @@
 .venv/
 bot_memory.db
 summary.jpg
+video_upload.mp4
 __pycache__/
 *.pyc
