@@ -1,6 +1,8 @@
 import os
 import random
+import re
 import sys
+import unicodedata
 import urllib.parse
 
 import autobot
@@ -8,8 +10,25 @@ import autobot
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 
 
+def _photo_to_image(photo):
+    src = photo.get("src", {})
+    image_url = src.get("large") or src.get("large2x") or src.get("original")
+    if not image_url:
+        return None
+
+    photographer = photo.get("photographer", "Pexels contributor")
+    photo_page = photo.get("url", "https://www.pexels.com")
+    attribution = f"📷 Ảnh: {photographer} / Pexels\n{photo_page}"
+    return {
+        "url": image_url,
+        "source": "pexels",
+        "attribution": attribution,
+        "alt": photo.get("alt", ""),
+    }
+
+
 def search_pexels_image(query):
-    """Tìm ảnh qua Pexels API. Trả về metadata ảnh hoặc None."""
+    """Tìm ảnh Pexels theo cách cũ: lấy ngẫu nhiên một ảnh từ kết quả."""
     if not PEXELS_API_KEY:
         return None
 
@@ -26,27 +45,18 @@ def search_pexels_image(query):
             return None
 
         random.shuffle(photos)
-        photo = photos[0]
-        src = photo.get("src", {})
-        image_url = src.get("large") or src.get("large2x") or src.get("original")
-        if not image_url:
-            return None
-
-        photographer = photo.get("photographer", "Pexels contributor")
-        photo_page = photo.get("url", "https://www.pexels.com")
-        attribution = f"📷 Ảnh: {photographer} / Pexels\n{photo_page}"
-        return {
-            "url": image_url,
-            "source": "pexels",
-            "attribution": attribution,
-        }
+        for photo in photos:
+            image = _photo_to_image(photo)
+            if image:
+                return image
+        return None
     except Exception as e:
         print(f"⚠️ Pexels lỗi: {e}")
         return None
 
 
 def search_bing_image(query):
-    """Fallback tạm thời nếu chưa có Pexels key hoặc Pexels không trả ảnh."""
+    """Fallback nếu Pexels không trả ảnh."""
     try:
         from bs4 import BeautifulSoup
         import json
@@ -70,6 +80,7 @@ def search_bing_image(query):
                     "url": image_url,
                     "source": "bing",
                     "attribution": "",
+                    "alt": "",
                 }
     except Exception as e:
         print(f"⚠️ Bing fallback lỗi: {e}")
@@ -87,6 +98,120 @@ def find_image(query):
     else:
         print("ℹ️ Pexels không có ảnh phù hợp, tạm dùng Bing fallback.")
     return search_bing_image(query)
+
+
+def _normalize_words(text):
+    text = unicodedata.normalize("NFKD", text or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+    return [w for w in re.findall(r"[a-z0-9]+", text) if len(w) >= 3]
+
+
+def recipe_image_relevance_score(query, alt_text):
+    """Điểm khớp đơn giản giữa truy vấn món ăn và mô tả ảnh Pexels."""
+    query_words = set(_normalize_words(query))
+    alt_words = set(_normalize_words(alt_text))
+    if not query_words or not alt_words:
+        return 0
+
+    generic = {
+        "food", "dish", "meal", "dinner", "lunch", "recipe", "cuisine",
+        "plate", "table", "fresh", "delicious", "with", "and", "the",
+    }
+    meaningful = query_words - generic
+    if not meaningful:
+        meaningful = query_words
+    return len(meaningful & alt_words)
+
+
+def build_recipe_fallback_queries(dish):
+    """Fallback rộng, không giới hạn vào món Việt Nam."""
+    return [
+        f"{dish} food",
+        f"{dish} dinner",
+        "international food dinner meal",
+        "homemade dinner food",
+        "delicious family meal",
+    ]
+
+
+def generate_recipe_search_query(dish):
+    """Nhờ Gemini chuyển tên món thành truy vấn ảnh tiếng Anh rõ ràng."""
+    prompt = (
+        f"Món ăn là: {dish}. Hãy tạo đúng 1 cụm từ tìm ảnh bằng tiếng Anh, tối đa 8 từ, "
+        "nêu đúng tên món và loại ẩm thực nếu biết. Chỉ trả về cụm từ tìm kiếm, không giải thích."
+    )
+    result = autobot.call_gemini(prompt)
+    return (result or dish).strip()
+
+
+def search_relevant_recipe_image(dish):
+    """Ưu tiên ảnh khớp món; nếu không đủ liên quan sẽ trả None để fallback rộng."""
+    if not PEXELS_API_KEY:
+        return None
+
+    english_query = generate_recipe_search_query(dish)
+    queries = []
+    for q in [english_query, dish, f"{english_query} food"]:
+        q = (q or "").strip()
+        if q and q not in queries:
+            queries.append(q)
+
+    best_image = None
+    best_score = -1
+
+    for query in queries:
+        try:
+            res = autobot.http.get(
+                "https://api.pexels.com/v1/search",
+                headers={"Authorization": PEXELS_API_KEY},
+                params={"query": query, "per_page": 20, "orientation": "square"},
+                timeout=20,
+            )
+            res.raise_for_status()
+            photos = res.json().get("photos", [])
+        except Exception as e:
+            print(f"⚠️ Pexels recipe search lỗi với '{query}': {e}")
+            continue
+
+        # Pexels đã xếp theo relevance; không shuffle ở nhánh chính xác.
+        for index, photo in enumerate(photos[:10]):
+            image = _photo_to_image(photo)
+            if not image:
+                continue
+            score = recipe_image_relevance_score(query, photo.get("alt", ""))
+            # Kết quả đầu tiên của Pexels được cộng nhẹ vì API đã rank theo relevance.
+            if index == 0:
+                score += 1
+            if score > best_score:
+                best_score = score
+                best_image = image
+
+        if best_score >= 2:
+            print(f"✅ Ảnh recipe khớp món (score={best_score}) với truy vấn: {query}")
+            return best_image
+
+    if best_image and best_score >= 1:
+        print(f"✅ Dùng ảnh recipe gần đúng nhất (score={best_score}).")
+        return best_image
+
+    print("ℹ️ Không tìm được ảnh đủ liên quan trực tiếp tới món; chuyển sang fallback rộng.")
+    return None
+
+
+def find_recipe_image(dish):
+    exact = search_relevant_recipe_image(dish)
+    if exact:
+        return exact
+
+    # Theo yêu cầu: nếu không có ảnh liên quan, vẫn dùng cơ chế ảnh rộng/ngẫu nhiên.
+    fallback_queries = build_recipe_fallback_queries(dish)
+    random.shuffle(fallback_queries)
+    for query in fallback_queries:
+        image = find_image(query)
+        if image:
+            print(f"ℹ️ Recipe đang dùng ảnh fallback rộng: {query}")
+            return image
+    return None
 
 
 def download_image(image_url, prefix):
@@ -200,24 +325,27 @@ def recipe_job():
     print("🍳 Đang chạy Job: Chuyên mục ẩm thực & Affiliate...")
 
     dish_prompt = (
-        "Hãy gợi ý ngẫu nhiên 1 món ăn tối gia đình Việt Nam thật hấp dẫn. "
-        "CHỈ trả về đúng tên món ăn, không giải thích, không dùng dấu câu."
+        "Hãy gợi ý ngẫu nhiên đúng 1 món ăn hấp dẫn cho bữa chính hoặc bữa tối, có thể thuộc bất kỳ nền ẩm thực nào trên thế giới. "
+        "Luân phiên đa dạng giữa Việt Nam, Thái Lan, Nhật Bản, Hàn Quốc, Trung Quốc, Ấn Độ, Ý, Pháp, Mexico, Mỹ, "
+        "Địa Trung Hải, Trung Đông và các nền ẩm thực phổ biến khác. Ưu tiên món có nguyên liệu dễ tìm và có thể nấu tại nhà. "
+        "LỆNH BẮT BUỘC: CHỈ trả về đúng tên món ăn bằng tên phổ biến nhất, tuyệt đối không giải thích, không dùng dấu câu ở cuối."
     )
-    dish = autobot.call_gemini(dish_prompt) or "Thịt ba chỉ rang cháy cạnh"
+    dish = autobot.call_gemini(dish_prompt) or "Spaghetti Carbonara"
     print(f"💡 Món hôm nay: {dish}")
 
     prompt = (
         "Bạn là admin sành ăn của kênh TREND MỖI NGÀY. "
         f"Viết bài Facebook chuyên mục 'Chiều nay ăn gì?' với món '{dish}'.\n"
-        "Văn phong gần gũi, kích thích vị giác; chia sẻ 3 bước nấu nhanh. "
-        "Thêm #TRENDMOINGAY #ChieuNayAnGi #ThucDonGiaDinh. "
+        "Món có thể thuộc bất kỳ nền ẩm thực nào. Hãy giới thiệu ngắn nguồn gốc/phong cách ẩm thực nếu phù hợp, "
+        "văn phong gần gũi, kích thích vị giác; chia sẻ 3 bước nấu thực tế, ngắn gọn và dễ làm tại nhà. "
+        "Thêm #TRENDMOINGAY #ChieuNayAnGi #MonNgonMoiNgay và 1 hashtag liên quan nền ẩm thực của món. "
         "Không chào hỏi; trình bày bằng icon phù hợp; cuối bài mời xem đồ nghề bếp ở bình luận."
     )
     status_text = autobot.call_gemini(prompt)
     if not status_text:
         raise RuntimeError("Gemini không tạo được nội dung recipe")
 
-    image = find_image(f"Vietnamese food {dish}")
+    image = find_recipe_image(dish)
     code, data = publish_photo_or_text(status_text, image, "recipe_post")
     post_id = data.get("post_id") or data.get("id")
 
@@ -228,7 +356,7 @@ def recipe_job():
     autobot.send_tele(f"📣 <b>CHUYÊN MỤC ẨM THỰC LÊN SÓNG:</b>\n{dish}")
 
     seed_prompt = (
-        f"Viết 1 bình luận mồi dưới 20 chữ cho món '{dish}', tự nhiên, dân dã, có 1 icon. "
+        f"Viết 1 bình luận mồi dưới 20 chữ cho món '{dish}', tự nhiên, vui vẻ, có 1 icon. "
         "Không giải thích, không dùng ngoặc kép."
     )
     seed_msg = autobot.call_gemini(seed_prompt) or f"Món {dish} nhìn là muốn ăn ngay luôn đó! 🤤"
