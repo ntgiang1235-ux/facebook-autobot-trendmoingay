@@ -226,7 +226,7 @@ def generate_caption(topic: str, creator: str, pexels_url: str) -> str:
         "Dưới 55 chữ, tự nhiên, tích cực, dễ tương tác, không bịa sự kiện hay nhân vật cụ thể. "
         "Không giải thích, không ngoặc kép. Thêm #TRENDMOINGAY #Reels và 2 hashtag phù hợp."
     )
-    caption = call_gemini(prompt) or f"Một khoảnh khắc đáng xem hôm nay ✨ #TRENDMOINGAY #Reels"
+    caption = call_gemini(prompt) or "Một khoảnh khắc đáng xem hôm nay ✨ #TRENDMOINGAY #Reels"
     attribution = f"\n\n🎥 Video: {creator or 'Pexels Creator'} / Pexels\n{pexels_url}"
     return caption.strip() + attribution
 
@@ -260,11 +260,11 @@ def video_post_job(dry_run: bool = False) -> None:
     creator = (video.get("user") or {}).get("name") or "Pexels Creator"
     duration = video.get("duration")
 
-    log(f"🎯 Chọn video {source_id} | {topic} | {duration}s | {creator}")
-    download_video(file_info["link"], TEMP_VIDEO)
-    log(f"📥 Đã tải video: {TEMP_VIDEO.stat().st_size / 1024 / 1024:.1f} MB")
-
     try:
+        log(f"🎯 Chọn video {source_id} | {topic} | {duration}s | {creator}")
+        download_video(file_info["link"], TEMP_VIDEO)
+        log(f"📥 Đã tải video: {TEMP_VIDEO.stat().st_size / 1024 / 1024:.1f} MB")
+
         caption = generate_caption(topic, creator, source_url)
         log(f"📝 Caption: {caption.splitlines()[0]}")
 
