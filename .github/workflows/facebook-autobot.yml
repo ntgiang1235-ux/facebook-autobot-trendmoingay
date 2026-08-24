@@ -32,8 +32,14 @@ on:
     # Finance: 11:00 Vietnam time
     - cron: "0 4 * * *"
 
-    # Reply to comments: every hour from 08:15 through 22:15 Vietnam time
-    - cron: "15 1-15 * * *"
+    # Recipe: 16:00 Vietnam time
+    - cron: "0 9 * * *"
+
+    # Fun/entertainment: 20:00 Vietnam time
+    - cron: "0 13 * * *"
+
+    # Reply to comments every 2 hours: 08:15, 10:15, ..., 22:15 Vietnam time
+    - cron: "15 1-15/2 * * *"
 
     # Daily summary: 21:30 Vietnam time
     - cron: "30 14 * * *"
@@ -94,7 +100,13 @@ jobs:
               "0 4 * * *")
                 ACTION="finance"
                 ;;
-              "15 1-15 * * *")
+              "0 9 * * *")
+                ACTION="recipe"
+                ;;
+              "0 13 * * *")
+                ACTION="fun"
+                ;;
+              "15 1-15/2 * * *")
                 ACTION="reply"
                 ;;
               "30 14 * * *")
