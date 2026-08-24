@@ -9,7 +9,7 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 
 
 def search_pexels_image(query):
-    """Tìm ảnh qua Pexels API. Trả về URL ảnh hoặc None."""
+    """Tìm ảnh qua Pexels API. Trả về metadata ảnh hoặc None."""
     if not PEXELS_API_KEY:
         return None
 
@@ -28,7 +28,18 @@ def search_pexels_image(query):
         random.shuffle(photos)
         photo = photos[0]
         src = photo.get("src", {})
-        return src.get("large") or src.get("large2x") or src.get("original")
+        image_url = src.get("large") or src.get("large2x") or src.get("original")
+        if not image_url:
+            return None
+
+        photographer = photo.get("photographer", "Pexels contributor")
+        photo_page = photo.get("url", "https://www.pexels.com")
+        attribution = f"📷 Ảnh: {photographer} / Pexels\n{photo_page}"
+        return {
+            "url": image_url,
+            "source": "pexels",
+            "attribution": attribution,
+        }
     except Exception as e:
         print(f"⚠️ Pexels lỗi: {e}")
         return None
@@ -55,17 +66,21 @@ def search_bing_image(query):
             data = json.loads(raw)
             image_url = data.get("murl")
             if image_url and image_url.startswith("http"):
-                return image_url
+                return {
+                    "url": image_url,
+                    "source": "bing",
+                    "attribution": "",
+                }
     except Exception as e:
         print(f"⚠️ Bing fallback lỗi: {e}")
     return None
 
 
 def find_image(query):
-    image_url = search_pexels_image(query)
-    if image_url:
+    image = search_pexels_image(query)
+    if image:
         print("✅ Đã tìm ảnh từ Pexels.")
-        return image_url
+        return image
 
     if not PEXELS_API_KEY:
         print("ℹ️ Chưa có PEXELS_API_KEY, tạm dùng Bing fallback.")
@@ -97,16 +112,23 @@ def download_image(image_url, prefix):
     return path
 
 
-def publish_photo_or_text(status_text, image_url, prefix):
+def publish_photo_or_text(status_text, image, prefix):
     """Ưu tiên ảnh; nếu ảnh không dùng được thì đăng text-only."""
     temp_path = None
+    final_text = status_text
+    image_url = image.get("url") if image else None
+    attribution = image.get("attribution", "") if image else ""
+
+    if attribution:
+        final_text = f"{status_text}\n\n{attribution}"
+
     try:
         if image_url:
             temp_path = download_image(image_url, prefix)
             with open(temp_path, "rb") as f:
                 code, data = autobot.call_fb_api(
                     "me/photos",
-                    {"message": status_text},
+                    {"message": final_text},
                     files={"source": f},
                 )
             if code == 200:
@@ -164,8 +186,8 @@ def fun_job():
         "thức khuya lướt điện thoại, sáng dậy không nổi": "funny sleepy phone night",
         "những triết lý vô tri, ngớ ngẩn nhưng nghe cực kỳ hợp lý": "funny confused cat thinking",
     }
-    image_url = find_image(image_queries.get(topic, "funny reaction"))
-    code, data = publish_photo_or_text(status_text, image_url, "fun_post")
+    image = find_image(image_queries.get(topic, "funny reaction"))
+    code, data = publish_photo_or_text(status_text, image, "fun_post")
 
     if code != 200:
         raise RuntimeError(f"Lỗi đăng bài giải trí: {data}")
@@ -195,8 +217,8 @@ def recipe_job():
     if not status_text:
         raise RuntimeError("Gemini không tạo được nội dung recipe")
 
-    image_url = find_image(f"Vietnamese food {dish}")
-    code, data = publish_photo_or_text(status_text, image_url, "recipe_post")
+    image = find_image(f"Vietnamese food {dish}")
+    code, data = publish_photo_or_text(status_text, image, "recipe_post")
     post_id = data.get("post_id") or data.get("id")
 
     if code != 200 or not post_id:
