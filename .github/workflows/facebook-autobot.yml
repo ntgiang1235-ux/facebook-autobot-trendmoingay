@@ -17,6 +17,7 @@ on:
           - veo
           - recipe
           - fun
+          - video
 
   schedule:
     # News posts: 08:30, 10:30, 12:30, 14:30, 15:30 Vietnam time (UTC+7)
@@ -44,6 +45,12 @@ on:
     # Daily summary: 21:30 Vietnam time
     - cron: "30 14 * * *"
 
+    # Video: 09:30, 12:45, 17:30, 21:00 Vietnam time
+    - cron: "30 2 * * *"
+    - cron: "45 5 * * *"
+    - cron: "30 10 * * *"
+    - cron: "0 14 * * *"
+
 permissions:
   contents: read
 
@@ -54,7 +61,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     env:
       TZ: Asia/Ho_Chi_Minh
@@ -99,6 +106,7 @@ jobs:
               "0 13 * * *") ACTION="fun" ;;
               "15 1-15/2 * * *") ACTION="reply" ;;
               "30 14 * * *") ACTION="summary" ;;
+              "30 2 * * *"|"45 5 * * *"|"30 10 * * *"|"0 14 * * *") ACTION="video" ;;
               *)
                 echo "Unknown schedule: ${{ github.event.schedule }}"
                 exit 1
@@ -109,5 +117,10 @@ jobs:
           echo "Selected action: $ACTION"
           echo "action=$ACTION" >> "$GITHUB_OUTPUT"
 
-      - name: Run bot
+      - name: Run video bot
+        if: steps.select_action.outputs.action == 'video'
+        run: python autobotvideo.py run
+
+      - name: Run text/image bot
+        if: steps.select_action.outputs.action != 'video'
         run: python runner.py "${{ steps.select_action.outputs.action }}"
