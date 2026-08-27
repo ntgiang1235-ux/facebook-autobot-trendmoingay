@@ -93,6 +93,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Run retry unit tests
+        run: python -m unittest tests.test_db_retry -v
+
       - name: Select bot action
         id: select_action
         shell: bash
@@ -121,8 +124,8 @@ jobs:
 
       - name: Run video bot
         if: steps.select_action.outputs.action == 'video'
-        run: python autobotvideo.py run
+        run: python safe_video_runner.py run
 
       - name: Run text/image bot
         if: steps.select_action.outputs.action != 'video'
-        run: python runner.py "${{ steps.select_action.outputs.action }}"
+        run: python safe_runner.py "${{ steps.select_action.outputs.action }}"
