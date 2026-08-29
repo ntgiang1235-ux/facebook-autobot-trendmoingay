@@ -98,6 +98,22 @@ class HardeningRunnerTests(unittest.TestCase):
         validate.assert_called_once_with("post")
         self.assertEqual(outcome.status, "skipped")
 
+    def test_veo_routes_shared_telegram_and_fails_on_delivery_failure(self):
+        with patch.object(hardening_runner.autobot, "validate_runtime_config") as validate, patch.object(
+            hardening_runner.notifications, "send_message", return_value=False
+        ) as send_message, patch.object(
+            hardening_runner.autobot,
+            "veo_prompt_job",
+            side_effect=lambda: hardening_runner.autobot.send_tele("<b>veo</b>"),
+        ):
+            jobs = hardening_runner.resolve_jobs()
+            self.assertIs(hardening_runner.autobot.send_tele, send_message)
+            with self.assertRaisesRegex(RuntimeError, "Telegram delivery failed"):
+                jobs["veo"]()
+
+        validate.assert_called_once_with("veo")
+        send_message.assert_called_once_with("<b>veo</b>")
+
 
 if __name__ == "__main__":
     unittest.main()
