@@ -18,8 +18,12 @@ on:
           - recipe
           - fun
           - video
+          - health
 
   schedule:
+    # Daily dependency health check: 07:17 Vietnam time (UTC+7)
+    - cron: "17 0 * * *"
+
     # News posts: 08:30, 11:30, 14:30, 18:30 Vietnam time (UTC+7)
     - cron: "30 1 * * *"
     - cron: "30 4 * * *"
@@ -31,24 +35,24 @@ on:
     - cron: "15 7 * * *"
     - cron: "15 13 * * *"
 
-    # Philosophy: 09:00 Vietnam time
-    - cron: "0 2 * * *"
+    # Philosophy: 09:07 Vietnam time
+    - cron: "7 2 * * *"
 
-    # Finance: 11:00 Vietnam time
-    - cron: "0 4 * * *"
+    # Finance: 11:07 Vietnam time
+    - cron: "7 4 * * *"
 
-    # Fun/entertainment: 13:30 and 20:00 Vietnam time
+    # Fun/entertainment: 13:30 and 20:07 Vietnam time
     - cron: "30 6 * * *"
-    - cron: "0 13 * * *"
+    - cron: "7 13 * * *"
 
-    # Recipe: 16:00 Vietnam time
-    - cron: "0 9 * * *"
+    # Recipe: 16:07 Vietnam time
+    - cron: "7 9 * * *"
 
-    # Video: 09:30, 12:45, 17:30, 21:00 Vietnam time
+    # Video: 09:30, 12:45, 17:30, 21:07 Vietnam time
     - cron: "30 2 * * *"
     - cron: "45 5 * * *"
     - cron: "30 10 * * *"
-    - cron: "0 14 * * *"
+    - cron: "7 14 * * *"
 
     # Daily summary: 21:30 Vietnam time
     - cron: "30 14 * * *"
@@ -67,6 +71,7 @@ jobs:
 
     env:
       TZ: Asia/Ho_Chi_Minh
+      SCHEDULED_CRON: ${{ github.event.schedule }}
       GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
       FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
       FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
@@ -101,13 +106,14 @@ jobs:
             ACTION="${{ inputs.action }}"
           else
             case "${{ github.event.schedule }}" in
+              "17 0 * * *") ACTION="health" ;;
               "30 1 * * *"|"30 4 * * *"|"30 7 * * *"|"30 11 * * *") ACTION="post" ;;
               "15 1 * * *"|"15 7 * * *"|"15 13 * * *") ACTION="reply" ;;
-              "0 2 * * *") ACTION="philosophy" ;;
-              "0 4 * * *") ACTION="finance" ;;
-              "30 6 * * *"|"0 13 * * *") ACTION="fun" ;;
-              "0 9 * * *") ACTION="recipe" ;;
-              "30 2 * * *"|"45 5 * * *"|"30 10 * * *"|"0 14 * * *") ACTION="video" ;;
+              "7 2 * * *") ACTION="philosophy" ;;
+              "7 4 * * *") ACTION="finance" ;;
+              "30 6 * * *"|"7 13 * * *") ACTION="fun" ;;
+              "7 9 * * *") ACTION="recipe" ;;
+              "30 2 * * *"|"45 5 * * *"|"30 10 * * *"|"7 14 * * *") ACTION="video" ;;
               "30 14 * * *") ACTION="summary" ;;
               *)
                 echo "Unknown schedule: ${{ github.event.schedule }}"
