@@ -1,6 +1,6 @@
 import unittest
 
-from app.job_adapters import adapt_publish_job, adapt_reply_job
+from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
 
 
 class FakeModule:
@@ -8,6 +8,7 @@ class FakeModule:
         self.fb_responses = []
         self.get_responses = []
         self.gemini_responses = []
+        self.delivery_responses = []
 
     def call_fb_api(self, endpoint, data, files=None):
         return self.fb_responses.pop(0)
@@ -17,6 +18,9 @@ class FakeModule:
 
     def call_gemini(self, prompt, timeout=30):
         return self.gemini_responses.pop(0)
+
+    def send_tele(self, message):
+        return self.delivery_responses.pop(0)
 
 
 class JobAdapterTests(unittest.TestCase):
@@ -57,6 +61,19 @@ class JobAdapterTests(unittest.TestCase):
         job = adapt_publish_job(legacy_job, module, lambda endpoint: endpoint == "me/feed")
         outcome = job()
 
+        self.assertEqual(outcome.status, "success")
+
+    def test_optional_seed_gemini_failure_after_primary_success_does_not_fail_job(self):
+        module = FakeModule()
+        module.gemini_responses = ["main post", None]
+        module.fb_responses = [(200, {"id": "post-1"})]
+
+        def legacy_job():
+            module.call_gemini("main")
+            module.call_fb_api("me/feed", {"message": "hello"})
+            module.call_gemini("optional seed")
+
+        outcome = adapt_publish_job(legacy_job, module, lambda endpoint: endpoint == "me/feed")()
         self.assertEqual(outcome.status, "success")
 
     def test_no_publish_can_be_explicitly_skipped(self):
@@ -105,6 +122,45 @@ class JobAdapterTests(unittest.TestCase):
             module.get_fb_api("me/feed")
 
         outcome = adapt_reply_job(legacy_reply, module)()
+        self.assertEqual(outcome.status, "success")
+
+    def test_delivery_job_skips_when_no_work_was_needed(self):
+        module = FakeModule()
+        outcome = adapt_delivery_job(lambda: None, module, allow_skip=True)()
+        self.assertEqual(outcome.status, "skipped")
+
+    def test_delivery_job_fails_when_gemini_returns_no_content(self):
+        module = FakeModule()
+        module.gemini_responses = [None]
+
+        def legacy_job():
+            module.call_gemini("generate")
+
+        with self.assertRaisesRegex(RuntimeError, "Gemini returned no content"):
+            adapt_delivery_job(legacy_job, module, allow_skip=True)()
+
+    def test_delivery_job_fails_when_telegram_delivery_fails(self):
+        module = FakeModule()
+        module.gemini_responses = ["content"]
+        module.delivery_responses = [False]
+
+        def legacy_job():
+            module.call_gemini("generate")
+            module.send_tele("content")
+
+        with self.assertRaisesRegex(RuntimeError, "Telegram delivery failed"):
+            adapt_delivery_job(legacy_job, module, allow_skip=True)()
+
+    def test_delivery_job_succeeds_when_telegram_delivery_succeeds(self):
+        module = FakeModule()
+        module.gemini_responses = ["content"]
+        module.delivery_responses = [True]
+
+        def legacy_job():
+            module.call_gemini("generate")
+            module.send_tele("content")
+
+        outcome = adapt_delivery_job(legacy_job, module, allow_skip=True)()
         self.assertEqual(outcome.status, "success")
 
 
