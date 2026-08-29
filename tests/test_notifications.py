@@ -48,6 +48,22 @@ class NotificationsTests(unittest.TestCase):
         self.assertIn("Facebook HTTP 500", text)
         self.assertIn("https://github.com/example/run/1", text)
 
+    def test_send_failure_escapes_dynamic_html_content(self):
+        with patch.object(notifications, "TELEGRAM_TOKEN", "bot-token"), patch.object(
+            notifications, "TELEGRAM_CHAT_ID", "123"
+        ), patch.object(notifications.http, "post", return_value=FakeResponse()) as post:
+            result = notifications.send_failure(
+                "post<&>",
+                RuntimeError("upstream <502> & timeout"),
+                "https://github.com/example/run/1?a=1&b=2",
+            )
+
+        self.assertTrue(result)
+        text = post.call_args.kwargs["json"]["text"]
+        self.assertIn("post&lt;&amp;&gt;", text)
+        self.assertIn("upstream &lt;502&gt; &amp; timeout", text)
+        self.assertIn("?a=1&amp;b=2", text)
+
     def test_notification_network_failure_is_swallowed(self):
         with patch.object(notifications, "TELEGRAM_TOKEN", "bot-token"), patch.object(
             notifications, "TELEGRAM_CHAT_ID", "123"
