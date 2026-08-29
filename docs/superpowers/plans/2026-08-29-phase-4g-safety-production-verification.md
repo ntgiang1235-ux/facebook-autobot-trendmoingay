@@ -26,12 +26,12 @@
 
 - Create `app/safety.py`: kill-switch policy and fallback strategy resolution.
 - Create `app/regression.py`: regression eligibility/detection.
-- Extend `app/strategy_repository.py`: last-good snapshot promotion/rollback transaction.
+- Modify `app/strategy_repository.py`: last-good snapshot promotion/rollback transaction.
 - Create `verification_runner.py`: read-only/shadow and live verification commands.
 - Modify `hardening_runner.py`: add `verify_adaptive` and `strategy_guard` actions.
 - Modify `.github/workflows/facebook-autobot.yml`: recurring strategy guard and manual verification action.
 - Create `tests/test_safety.py`, `tests/test_regression.py`, `tests/test_verification_runner.py`.
-- Modify `tests/test_strategy_repository.py`, `tests/test_hardening_runner.py`, workflow static tests.
+- Modify `tests/test_strategy_repository.py`, `tests/test_hardening_runner.py`, `tests/test_notifications.py`, `tests/test_workflows.py`.
 
 ### Task 1: Implement kill-switch precedence and baseline fallback
 
@@ -58,7 +58,30 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement explicit mode resolver**
 
-`EffectiveMode` contains booleans `use_adaptive_strategy`, `use_dynamic_schedule`, `allow_auto_suspend` plus a human-readable `reason`. No environment variable silently overrides durable config except the explicit deployment shadow/active gate already defined in 4E.
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class EffectiveMode:
+    use_adaptive_strategy: bool
+    use_dynamic_schedule: bool
+    allow_auto_suspend: bool
+    reason: str
+
+
+def resolve_effective_mode(config) -> EffectiveMode:
+    if not config.adaptive_enabled:
+        return EffectiveMode(False, False, False, "adaptive_disabled")
+    return EffectiveMode(
+        True,
+        bool(config.auto_schedule_enabled),
+        bool(config.auto_suspend_enabled),
+        "adaptive_enabled",
+    )
+```
+
+No environment variable silently overrides durable config except the explicit deployment shadow/active gate defined in 4E.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -94,7 +117,21 @@ Expected: FAIL for missing rollback functions.
 
 - [ ] **Step 3: Implement append-only rollback semantics**
 
-Never update old snapshot payloads. Rollback creates a new current version copied from last-good state and updates config/current pointer atomically as far as the libSQL repository abstraction permits. If copy/write fails, keep the existing current version and raise.
+```python
+def rollback_to_version(execute_fn, version_id: int) -> int:
+    source = load_strategy_version(execute_fn, version_id)
+    current = current_strategy_version(execute_fn)
+    new_version = save_strategy_version(
+        execute_fn,
+        source.payload,
+        reason=f"automatic_rollback_from:{current}",
+        is_last_good=False,
+    )
+    save_config_value(execute_fn, "current_strategy_version", str(new_version))
+    return new_version
+```
+
+Never update old snapshot payloads. If copy/write fails, keep the existing current version and raise; implement the repository write sequence with the strongest transaction behavior supported by the existing libSQL abstraction.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -136,7 +173,21 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement exact trigger**
 
-Compute relative decline `(baseline_score - recent_score) / baseline_score`. Eligibility requires decline `> 0.20`, mature sample threshold, comparable metric capability set, and a strategy version transition within the evaluation window. Return decision fields `rollback`, `decline_ratio`, `reason`, `target_version`.
+```python
+def evaluate_regression(data: RegressionInput) -> RegressionDecision:
+    if data.baseline_score <= 0 or data.mature_samples < 5:
+        return RegressionDecision(False, 0.0, "insufficient_data", None)
+    if data.metric_capabilities != data.baseline_metric_capabilities:
+        return RegressionDecision(False, 0.0, "metrics_degraded", None)
+    decline = (data.baseline_score - data.recent_score) / data.baseline_score
+    if decline <= 0.20:
+        return RegressionDecision(False, decline, "within_guardrail", None)
+    if not data.strategy_changed:
+        return RegressionDecision(False, decline, "not_attributable_to_strategy", None)
+    return RegressionDecision(True, decline, "regression_detected", data.last_good_version)
+```
+
+The comparison uses `>0.20`, not `>=0.20`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -176,11 +227,28 @@ Expected: FAIL because guard is missing.
 
 - [ ] **Step 3: Implement guard**
 
-Load metrics/strategy state, call `evaluate_regression`, perform append-only rollback only when eligible and `dry_run=False`, then send a dedicated strategy alert through notifications. Persist guard outcome in `job_runs` via hardened runner.
+```python
+def run_strategy_guard(dry_run: bool = False):
+    data = load_regression_input(db.execute)
+    decision = regression.evaluate_regression(data)
+    if not decision.rollback:
+        return GuardResult("ok", decision.reason, None)
+    if dry_run:
+        return GuardResult("would_rollback", decision.reason, decision.target_version)
+    new_version = strategy_repository.rollback_to_version(db.execute, decision.target_version)
+    notifications.send_strategy_alert(
+        data.current_version,
+        new_version,
+        decision.decline_ratio,
+    )
+    return GuardResult("rolled_back", decision.reason, new_version)
+```
+
+Wire through `hardening_runner` so `job_runs` records the outcome.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run focused tests above.
+Run: `python -m unittest tests.test_verification_runner tests.test_hardening_runner tests.test_notifications -v`
 
 Expected: PASS.
 
@@ -213,7 +281,18 @@ Expected: FAIL for missing verifier.
 
 - [ ] **Step 3: Implement read-only verifier**
 
-Return checks as named PASS/WARN/FAIL records. `verify_adaptive` must not mutate production state. Exit/fail hardened job only when at least one FAIL exists; warnings are reported but do not produce false failure.
+```python
+def verify_adaptive_state(execute_fn, now) -> VerificationReport:
+    checks = []
+    checks.extend(check_schema(execute_fn))
+    checks.extend(check_strategy_versions(execute_fn))
+    checks.extend(check_daily_plan(execute_fn, now))
+    checks.extend(check_metrics_maturity(execute_fn, now))
+    checks.extend(check_strategy_weights(execute_fn))
+    return VerificationReport(tuple(checks))
+```
+
+`verify_adaptive` must not mutate production state. Fail the hardened job only when at least one check has status `FAIL`; warnings remain visible but non-fatal.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -232,31 +311,42 @@ git commit -m "feat: verify adaptive production state"
 
 **Files:**
 - Modify: `.github/workflows/facebook-autobot.yml`
-- Modify/Create: workflow static tests.
+- Modify: `tests/test_workflows.py`
 
 **Interfaces:**
-- Strategy guard schedule: once daily after metrics have matured/refreshed; use `45 15 * * *` UTC (22:45 Vietnam) so it follows the daily report.
-- `verify_adaptive` remains manually dispatchable and may also run after deployments if workflow structure supports a safe branch event.
+- Strategy guard cron: `45 15 * * *` UTC = 22:45 Vietnam.
+- `verify_adaptive` remains manual through `workflow_dispatch`.
 
 - [ ] **Step 1: Write failing workflow tests**
 
-Assert guard runs daily once, verification is manual, neither action publishes content, and guard receives Turso/Telegram config but does not require media-generation secrets unless shared workflow configuration supplies them.
+Extend `WorkflowTests` in `tests/test_workflows.py`:
+
+```python
+def test_adaptive_strategy_guard_schedule(self):
+    prod = (ROOT / ".github/workflows/facebook-autobot.yml").read_text(encoding="utf-8")
+    self.assertIn('cron: "45 15 * * *"', prod)
+    self.assertIn('ACTION="strategy_guard"', prod)
+    self.assertIn("verify_adaptive", prod)
+```
+
+Also assert the strategy-guard cron branch does not call `dispatcher_runner.py` or a publish action.
 
 - [ ] **Step 2: Verify RED**
 
-Run workflow/static tests.
+Run: `python -m unittest tests.test_workflows -v`
 
 Expected: FAIL because mappings are absent.
 
 - [ ] **Step 3: Add workflow mappings**
 
-Keep `strategy_guard` separate from dispatcher so a dispatcher problem cannot prevent rollback monitoring. Preserve `workflow_dispatch` action selection for manual verification.
+Add `45 15 * * *` and map it only to `strategy_guard`. Add `verify_adaptive` to manual action choices. Keep `strategy_guard` separate from the adaptive dispatcher so a dispatcher failure cannot disable rollback monitoring.
 
 - [ ] **Step 4: Full repository verification**
 
 Run:
 
 ```bash
+python -m unittest tests.test_workflows -v
 python -m unittest discover -s tests -v
 python -m compileall -q .
 git diff --check
@@ -267,14 +357,14 @@ Expected: all PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/facebook-autobot.yml tests
+git add .github/workflows/facebook-autobot.yml tests/test_workflows.py
 git commit -m "ci: schedule adaptive strategy guard"
 ```
 
 ### Task 7: Production learning verification sequence
 
 **Files:**
-- No source changes unless a verified defect is found; defects require their own TDD commit before continuing.
+- No source changes unless a verified defect is found; a defect gets its own failing test, minimal fix, focused verification, and commit before this sequence resumes.
 
 **Interfaces:**
 - Evidence checklist only.
