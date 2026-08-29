@@ -8,7 +8,7 @@ import autobotvideo
 import runner
 from app import db, notifications
 from app.http import secure_session_from
-from app.job_adapters import adapt_publish_job, adapt_reply_job
+from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
 from app.job_contract import JobOutcome, run_job
 
 VALID_ACTIONS = {
@@ -55,11 +55,12 @@ def _validated_text_job(action: str, job_fn: Callable[[], object]) -> Callable[[
 
 
 def resolve_jobs() -> dict[str, Callable[[], object]]:
-    """Resolve jobs through shared DB, verified HTTP and legacy outcome adapters."""
+    """Resolve jobs through shared DB, verified HTTP and explicit outcome adapters."""
     autobot.execute_db = db.execute
     autobotvideo.db_execute = db.execute
     autobot.http = secure_session_from(autobot.http)
     autobotvideo.http = secure_session_from(autobotvideo.http)
+    autobot.send_tele = notifications.send_message
 
     text_jobs = {
         "post": adapt_publish_job(
@@ -87,7 +88,11 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
             lambda endpoint: endpoint.endswith("/photos"),
             allow_skip=True,
         ),
-        "veo": autobot.veo_prompt_job,
+        "veo": adapt_delivery_job(
+            autobot.veo_prompt_job,
+            autobot,
+            allow_skip=True,
+        ),
         "recipe": runner.recipe_job,
         "fun": runner.fun_job,
     }
