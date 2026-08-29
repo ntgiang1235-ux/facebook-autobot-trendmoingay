@@ -1,4 +1,5 @@
 import os
+from html import escape
 
 import requests
 from dotenv import load_dotenv
@@ -36,9 +37,9 @@ def send_failure(action: str, error: Exception, run_url: str | None = None) -> b
     lines = [
         "🚨 AUTOBOT FAILED",
         "",
-        f"Job: {action}",
-        f"Error: {str(error)[:500]}",
+        f"Job: {escape(action)}",
+        f"Error: {escape(str(error)[:500])}",
     ]
     if run_url:
-        lines.extend(["", f"GitHub Run: {run_url}"])
+        lines.extend(["", f"GitHub Run: {escape(run_url)}"])
     return send_message("\n".join(lines))
