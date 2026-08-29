@@ -6,10 +6,10 @@ from typing import Callable
 import autobot
 import autobotvideo
 import runner
-from app import db, notifications
+from app import db, health, notifications, scheduler
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
-from app.job_contract import JobOutcome, run_job
+from app.job_contract import JobOutcome, run_job, skipped
 
 VALID_ACTIONS = {
     "post",
@@ -21,6 +21,7 @@ VALID_ACTIONS = {
     "recipe",
     "fun",
     "video",
+    "health",
 }
 
 
@@ -116,6 +117,11 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
         for action, job_fn in text_jobs.items()
     }
     jobs["video"] = lambda: autobotvideo.video_post_job(dry_run=False)
+    jobs["health"] = lambda: health.run_health_check(
+        autobot.http,
+        autobot.call_gemini,
+        db.execute,
+    )
     return jobs
 
 
@@ -130,13 +136,54 @@ def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None)
 
     started_at = utc_now_iso()
     run_key = make_run_key(action, started_at)
+    meta = scheduler.schedule_metadata(os.getenv("SCHEDULED_CRON", ""))
+    scheduled_for = meta.scheduled_for.isoformat() if meta.scheduled_for else None
 
     db.ensure_schema()
-    db.record_job(run_key, action, "started", started_at, None, "")
+    db.record_job(
+        run_key,
+        action,
+        "started",
+        started_at,
+        None,
+        "",
+        scheduled_for,
+        meta.delay_minutes,
+    )
+
+    if meta.stale:
+        finished_at = utc_now_iso()
+        detail = f"stale schedule: delayed {meta.delay_minutes} minutes"
+        db.record_job(
+            run_key,
+            action,
+            "skipped",
+            started_at,
+            finished_at,
+            detail,
+            scheduled_for,
+            meta.delay_minutes,
+        )
+        notifications.send_stale(
+            action,
+            scheduled_for or "unknown",
+            meta.delay_minutes or 0,
+            github_run_url(),
+        )
+        return skipped(detail)
 
     def recorder(status: str, detail: str = "") -> None:
         finished_at = utc_now_iso()
-        db.record_job(run_key, action, status, started_at, finished_at, detail[:1000])
+        db.record_job(
+            run_key,
+            action,
+            status,
+            started_at,
+            finished_at,
+            detail[:1000],
+            scheduled_for,
+            meta.delay_minutes,
+        )
 
     def notifier(failed_action: str, error: Exception) -> None:
         notifications.send_failure(failed_action, error, github_run_url())
@@ -148,7 +195,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health>"
         )
     run_action(sys.argv[1])
 
