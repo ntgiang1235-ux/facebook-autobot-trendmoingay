@@ -54,6 +54,10 @@ def _validated_text_job(action: str, job_fn: Callable[[], object]) -> Callable[[
     return validated
 
 
+def _runner_primary_publish(endpoint: str) -> bool:
+    return endpoint in {"me/feed", "me/photos"}
+
+
 def resolve_jobs() -> dict[str, Callable[[], object]]:
     """Resolve jobs through shared DB, verified HTTP and explicit outcome adapters."""
     autobot.execute_db = db.execute
@@ -93,8 +97,18 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
             autobot,
             allow_skip=True,
         ),
-        "recipe": runner.recipe_job,
-        "fun": runner.fun_job,
+        "recipe": adapt_publish_job(
+            runner.recipe_job,
+            autobot,
+            _runner_primary_publish,
+            allow_skip=False,
+        ),
+        "fun": adapt_publish_job(
+            runner.fun_job,
+            autobot,
+            _runner_primary_publish,
+            allow_skip=False,
+        ),
     }
 
     jobs = {
