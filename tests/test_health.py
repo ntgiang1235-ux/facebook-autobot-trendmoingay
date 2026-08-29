@@ -44,6 +44,7 @@ ENV = {
     "FB_ACCESS_TOKEN": "fb-token",
     "PEXELS_API_KEY": "pexels-key",
     "TELEGRAM_TOKEN": "telegram-token",
+    "TELEGRAM_CHAT_ID": "chat-id",
 }
 
 
