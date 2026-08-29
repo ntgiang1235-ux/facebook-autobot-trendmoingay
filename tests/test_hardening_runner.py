@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import hardening_runner
+from app.http import VerifiedSession
 from app.job_contract import skipped
 
 
@@ -67,11 +68,13 @@ class HardeningRunnerTests(unittest.TestCase):
         self.assertIn("facebook failed", str(args[1]))
         self.assertEqual(args[2], "https://github.com/run/1")
 
-    def test_resolve_jobs_routes_legacy_database_calls_through_shared_db(self):
+    def test_resolve_jobs_routes_shared_db_and_secure_http(self):
         with patch.object(hardening_runner.db, "execute") as execute:
             jobs = hardening_runner.resolve_jobs()
             self.assertIs(hardening_runner.autobot.execute_db, execute)
             self.assertIs(hardening_runner.autobotvideo.db_execute, execute)
+            self.assertIsInstance(hardening_runner.autobot.http, VerifiedSession)
+            self.assertIsInstance(hardening_runner.autobotvideo.http, VerifiedSession)
         self.assertEqual(
             set(jobs),
             {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video"},
