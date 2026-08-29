@@ -80,6 +80,14 @@ class HardeningRunnerTests(unittest.TestCase):
             {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video"},
         )
 
+    def test_resolve_jobs_wraps_legacy_false_green_actions(self):
+        jobs = hardening_runner.resolve_jobs()
+        self.assertIsNot(jobs["post"], hardening_runner.autobot.single_post_job)
+        self.assertIsNot(jobs["reply"], hardening_runner.autobot.auto_reply_job)
+        self.assertIsNot(jobs["finance"], hardening_runner.autobot.financial_post_job)
+        self.assertIsNot(jobs["philosophy"], hardening_runner.autobot.philosophy_post_job)
+        self.assertIsNot(jobs["summary"], hardening_runner.autobot.daily_summary_job)
+
 
 if __name__ == "__main__":
     unittest.main()
