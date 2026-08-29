@@ -88,6 +88,16 @@ class HardeningRunnerTests(unittest.TestCase):
         self.assertIsNot(jobs["philosophy"], hardening_runner.autobot.philosophy_post_job)
         self.assertIsNot(jobs["summary"], hardening_runner.autobot.daily_summary_job)
 
+    def test_text_jobs_preserve_runtime_config_validation(self):
+        with patch.object(hardening_runner.autobot, "validate_runtime_config") as validate, patch.object(
+            hardening_runner.autobot, "single_post_job", return_value=None
+        ):
+            jobs = hardening_runner.resolve_jobs()
+            outcome = jobs["post"]()
+
+        validate.assert_called_once_with("post")
+        self.assertEqual(outcome.status, "skipped")
+
 
 if __name__ == "__main__":
     unittest.main()
