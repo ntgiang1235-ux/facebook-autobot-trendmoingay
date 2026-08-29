@@ -290,11 +290,13 @@ def video_post_job(dry_run: bool = False) -> None:
 def main() -> None:
     action = sys.argv[1] if len(sys.argv) > 1 else "help"
     if action == "run":
-        video_post_job(dry_run=False)
-    elif action == "dry-run":
+        raise SystemExit(
+            "Production video phải chạy qua: python hardening_runner.py video"
+        )
+    if action == "dry-run":
         video_post_job(dry_run=True)
-    else:
-        print("Cách dùng: python autobotvideo.py run | dry-run")
+        return
+    print("Cách dùng: python autobotvideo.py dry-run")
 
 
 if __name__ == "__main__":
