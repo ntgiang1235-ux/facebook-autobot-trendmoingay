@@ -3,7 +3,6 @@ import time
 import random
 import requests
 import xml.etree.ElementTree as ET
-import urllib3
 import libsql
 import re
 import sys
@@ -18,7 +17,6 @@ from bs4 import BeautifulSoup
 
 # Khởi tạo môi trường
 load_dotenv()
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= 1. CẤU HÌNH & KHỞI TẠO SESSION =================
 GEMINI_API_KEYS = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
@@ -163,7 +161,7 @@ def is_safe(text):
 
 def get_article_content(url):
     try:
-        res = http.get(url, timeout=15, verify=False)
+        res = http.get(url, timeout=15)
         if res.status_code != 200: return ""
         soup = BeautifulSoup(res.text, 'html.parser')
         paragraphs = [p.text.strip() for p in soup.find_all('p') if len(p.text.strip()) > 30]
@@ -186,7 +184,7 @@ def get_news_smart():
     for _ in range(15):
         topic = random.choices(topics, weights=weights, k=1)[0]
         try:
-            res = http.get(random.choice(RSS_SOURCES[topic]), timeout=10, verify=False)
+            res = http.get(random.choice(RSS_SOURCES[topic]), timeout=10)
             if res.status_code != 200: continue
             content = res.text.strip()
             rss_idx = content.find('<rss')
@@ -671,36 +669,8 @@ def entertainment_post_job():
     else:
         print(f"❌ Lỗi đăng bài giải trí: {data}")
 
-# ================= 7. KHỞI CHẠY BẰNG CRONTAB =================
+# ================= 7. KHỞI CHẠY =================
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        action = sys.argv[1]
-        validate_runtime_config(action)
-        if action == "post":
-            print("🚀 Đang chạy Job: Đăng bài lẻ (Săn tin)...")
-            single_post_job()
-        elif action == "summary":
-            print("🌙 Đang chạy Job: Điểm tin cuối ngày...")
-            daily_summary_job()
-        elif action == "finance":
-            print("💰 Đang chạy Job: Tin tức Tài chính...")
-            financial_post_job()
-        elif action == "philosophy":
-            print("🧘 Đang chạy Job: Triết lý mỗi ngày...")
-            philosophy_post_job()
-        elif action == "reply":
-            print("💬 Đang chạy Job: Tự động trả lời bình luận...")
-            auto_reply_job()
-        elif action == "veo":
-            print("🎥 Đang chạy Job: Tạo kịch bản Video Veo-3...")
-            veo_prompt_job()
-        elif action == "recipe":
-            print("🍳 Đang chạy Job: Chuyên mục ẩm thực & Affiliate...")
-            recipe_post_job()
-        elif action == "fun":
-            print("🤡 Đang chạy Job: Giải trí & Tấu hài...")
-            entertainment_post_job()
-        else:
-            print("Tham số không hợp lệ. Dùng 'post', 'summary', 'finance', 'philosophy', 'reply', 'veo', 'recipe' hoặc 'fun'.")
-    else:
-        print("Vui lòng truyền tham số. VD: python3 autobot.py post")
+    raise SystemExit(
+        "autobot.py là module legacy. Hãy chạy: python hardening_runner.py <action>"
+    )
