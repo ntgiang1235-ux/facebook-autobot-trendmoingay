@@ -19,6 +19,18 @@ class NotificationsTests(unittest.TestCase):
         self.assertFalse(result)
         post.assert_not_called()
 
+    def test_send_message_preserves_html_parse_mode(self):
+        with patch.object(notifications, "TELEGRAM_TOKEN", "bot-token"), patch.object(
+            notifications, "TELEGRAM_CHAT_ID", "123"
+        ), patch.object(notifications.http, "post", return_value=FakeResponse()) as post:
+            result = notifications.send_message("<b>Hello</b>")
+
+        self.assertTrue(result)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["chat_id"], "123")
+        self.assertEqual(payload["text"], "<b>Hello</b>")
+        self.assertEqual(payload["parse_mode"], "HTML")
+
     def test_send_failure_contains_action_error_and_run_url(self):
         with patch.object(notifications, "TELEGRAM_TOKEN", "bot-token"), patch.object(
             notifications, "TELEGRAM_CHAT_ID", "123"
