@@ -43,28 +43,44 @@ class DatabaseTests(unittest.TestCase):
         self.assertTrue(connection.committed)
         self.assertTrue(connection.closed)
 
-    def test_ensure_schema_creates_job_runs_table(self):
-        with patch.object(db, "execute", return_value=[]) as execute:
+    def test_ensure_schema_adds_schedule_metadata_columns(self):
+        calls = []
+
+        def fake_execute(query, params=()):
+            calls.append((query, params))
+            if "PRAGMA table_info(job_runs)" in query:
+                return [
+                    (0, "run_key", "TEXT", 0, None, 1),
+                    (1, "action", "TEXT", 1, None, 0),
+                    (2, "status", "TEXT", 1, None, 0),
+                ]
+            return []
+
+        with patch.object(db, "execute", side_effect=fake_execute):
             db.ensure_schema()
 
-        query = execute.call_args.args[0]
-        self.assertIn("CREATE TABLE IF NOT EXISTS job_runs", query)
-        self.assertIn("run_key TEXT PRIMARY KEY", query)
-        self.assertIn("status TEXT NOT NULL", query)
+        queries = [query for query, _ in calls]
+        self.assertIn("scheduled_for TEXT", queries[0])
+        self.assertIn("delay_minutes INTEGER", queries[0])
+        self.assertTrue(any("ADD COLUMN scheduled_for TEXT" in query for query in queries))
+        self.assertTrue(any("ADD COLUMN delay_minutes INTEGER" in query for query in queries))
 
-    def test_record_job_upserts_run_status(self):
+    def test_record_job_upserts_run_status_with_schedule_metadata(self):
         with patch.object(db, "execute", return_value=[]) as execute:
             db.record_job(
                 "run-1",
                 "post",
                 "failed",
-                "2026-08-29T15:00:00+07:00",
-                "2026-08-29T15:00:10+07:00",
+                "2026-08-29T08:31:00+00:00",
+                "2026-08-29T08:31:10+00:00",
                 "facebook failed",
+                "2026-08-29T08:30:00+00:00",
+                1,
             )
 
         query, params = execute.call_args.args
-        self.assertIn("INSERT INTO job_runs", query)
+        self.assertIn("scheduled_for", query)
+        self.assertIn("delay_minutes", query)
         self.assertIn("ON CONFLICT(run_key) DO UPDATE", query)
         self.assertEqual(
             params,
@@ -72,9 +88,11 @@ class DatabaseTests(unittest.TestCase):
                 "run-1",
                 "post",
                 "failed",
-                "2026-08-29T15:00:00+07:00",
-                "2026-08-29T15:00:10+07:00",
+                "2026-08-29T08:31:00+00:00",
+                "2026-08-29T08:31:10+00:00",
                 "facebook failed",
+                "2026-08-29T08:30:00+00:00",
+                1,
             ),
         )
 
