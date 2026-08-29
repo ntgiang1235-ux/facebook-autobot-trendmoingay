@@ -26,10 +26,10 @@
 - Create `app/reporting.py`: report models, aggregation, renderers.
 - Create `reporting_runner.py`: daily/weekly job entry points.
 - Modify `hardening_runner.py`: add `daily_report` and `weekly_report` actions.
-- Modify `app/notifications.py`: optional chunk-safe intelligence sender if needed.
+- Modify `app/notifications.py`: chunk-safe intelligence sender.
 - Modify `.github/workflows/facebook-autobot.yml`: daily/weekly report schedules.
 - Create `tests/test_reporting.py`, `tests/test_reporting_runner.py`.
-- Modify `tests/test_notifications.py`, `tests/test_hardening_runner.py`, workflow static tests.
+- Modify `tests/test_notifications.py`, `tests/test_hardening_runner.py`, `tests/test_workflows.py`.
 
 ### Task 1: Build daily report dataset and renderer
 
@@ -52,21 +52,26 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement daily aggregation/rendering**
 
-Keep the text compact and stable for tests. Example structure:
+Keep the renderer deterministic around this structure:
 
-```text
-TREND MỖI NGÀY — Daily AI Report
-Published: 11 | Quality skips: 1
-Average score: 73.4
-Top: Finance • 20:00 • 88
-Weak: Recipe • 43
-AI decisions:
-• Recipe suspended for 7 days
-• Finance weight 18% → 25%
-Warnings: reach metric unavailable
+```python
+def render_daily_report(data: DailyReportData) -> str:
+    average = "pending" if data.average_score is None else f"{data.average_score:.1f}"
+    lines = [
+        "TREND MỖI NGÀY — Daily AI Report",
+        f"Published: {data.published} | Quality skips: {data.quality_skips}",
+        f"Average score: {average}",
+        f"Top: {data.top_label}",
+        f"Weak: {data.weak_label}",
+        "AI decisions:",
+        *[f"• {item}" for item in data.decisions],
+    ]
+    if data.warnings:
+        lines.append("Warnings: " + "; ".join(data.warnings))
+    return "\n".join(lines)
 ```
 
-When no mature score exists, render `Average score: pending` rather than `0`.
+When no mature score exists, render `pending`, never `0`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -102,7 +107,31 @@ Expected: FAIL for missing weekly functions.
 
 - [ ] **Step 3: Implement weekly renderer**
 
-Sort leaderboards deterministically by score descending then name. Cap each leaderboard to top 3 and bottom 1 to keep Telegram readable. Derive percentage trend only when both periods have adequate mature data.
+```python
+def _top(items, limit=3):
+    return sorted(items, key=lambda item: (-item.score, item.name))[:limit]
+
+
+def render_weekly_report(data: WeeklyReportData) -> str:
+    trend = (
+        "comparison unavailable"
+        if data.previous_average is None
+        else f"{((data.current_average / data.previous_average) - 1) * 100:+.1f}%"
+    )
+    lines = [
+        "TREND MỖI NGÀY — Weekly Content Intelligence",
+        f"Overall score: {data.current_average:.1f} ({trend})",
+        f"Best category: {data.best_category}",
+        f"Weakest category: {data.weakest_category}",
+        f"Best hook/style: {data.best_hook} / {data.best_style}",
+        f"Best time: {data.best_time}",
+        f"Exploration: {data.promoted_experiments} promoted, {data.rejected_experiments} rejected",
+    ]
+    lines.extend(f"• {movement}" for movement in data.strategy_movements)
+    return "\n".join(lines)
+```
+
+Only compute percentage trend when prior-week maturity is adequate and previous average is positive.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -138,7 +167,27 @@ Expected: FAIL for missing helper.
 
 - [ ] **Step 3: Implement chunk-safe sender**
 
-Reuse existing configured secure session and `send_message` semantics. Keep chunks comfortably below Telegram's hard message size limit; use a deterministic internal maximum of 3500 characters.
+```python
+def _chunks(text: str, max_chars: int = 3500) -> list[str]:
+    lines = text.splitlines()
+    chunks, current = [], ""
+    for line in lines:
+        candidate = f"{current}\n{line}".strip()
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def send_intelligence_report(title: str, body: str) -> bool:
+    return all(send_message(chunk) is True for chunk in _chunks(f"{title}\n{body}"))
+```
+
+Preserve the existing secure Telegram session and existing escaping behavior inside `send_message`/notification helpers; tests decide whether title/body should be escaped before chunking based on current implementation.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -176,7 +225,22 @@ Expected: FAIL because actions are missing.
 
 - [ ] **Step 3: Implement reporting runner/wiring**
 
-Use `db.execute` for reads and existing notifications for delivery. Return normal `JobOutcome` through hardened runner. Keep report generation deterministic for a fixed database state/time.
+```python
+def run_daily_report():
+    data = reporting.build_daily_report_data(db.execute, date.today())
+    body = reporting.render_daily_report(data)
+    if not notifications.send_intelligence_report("Daily AI Report", body):
+        raise RuntimeError("daily intelligence report delivery failed")
+
+
+def run_weekly_report():
+    data = reporting.build_weekly_report_data(db.execute, date.today())
+    body = reporting.render_weekly_report(data)
+    if not notifications.send_intelligence_report("Weekly Content Intelligence", body):
+        raise RuntimeError("weekly intelligence report delivery failed")
+```
+
+Wire those through `hardening_runner.resolve_jobs()` so `run_job` remains responsible for job outcome recording.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -195,29 +259,41 @@ git commit -m "feat: add hardened intelligence report jobs"
 
 **Files:**
 - Modify: `.github/workflows/facebook-autobot.yml`
-- Modify/Create: workflow static tests.
+- Modify: `tests/test_workflows.py`
 
 **Interfaces:**
-- Daily report: one fixed Vietnam-evening time after the final intended content slot; encode as UTC cron.
-- Weekly report: once weekly after enough Sunday/week-end data is available; encode as UTC cron.
+- Daily report cron: `15 15 * * *` UTC = 22:15 Vietnam.
+- Weekly report cron: `30 15 * * 0` UTC = 22:30 Sunday Vietnam.
 
 - [ ] **Step 1: Write failing workflow tests**
 
-Choose concrete schedules and make them explicit in tests: daily `15 15 * * *` UTC (22:15 Vietnam) and weekly `30 15 * * 0` UTC (22:30 Sunday Vietnam). Assert each schedule maps to exactly one reporting action and does not trigger publishing.
+Extend the existing `WorkflowTests` in `tests/test_workflows.py`:
+
+```python
+def test_intelligence_report_schedules(self):
+    prod = (ROOT / ".github/workflows/facebook-autobot.yml").read_text(encoding="utf-8")
+    self.assertIn('cron: "15 15 * * *"', prod)
+    self.assertIn('cron: "30 15 * * 0"', prod)
+    self.assertIn('ACTION="daily_report"', prod)
+    self.assertIn('ACTION="weekly_report"', prod)
+```
+
+Also assert those mappings do not call `dispatcher_runner.py` or a content publish action for the same cron branch.
 
 - [ ] **Step 2: Verify RED**
 
-Run workflow/static tests.
+Run: `python -m unittest tests.test_workflows -v`
 
 Expected: FAIL because report schedules are absent.
 
 - [ ] **Step 3: Add workflow mappings**
 
-Add cron entries and dispatch mapping while preserving manual action support. Pass the same secrets/environment needed to read Turso and send Telegram; Facebook/Gemini secrets are not required solely for report rendering unless existing workflow environment is shared.
+Add the two cron entries and map them explicitly to `daily_report` and `weekly_report`; preserve manual action support. Reuse Turso and Telegram secrets. Do not add a Facebook publish call in either branch.
 
 - [ ] **Step 4: Full verification**
 
 ```bash
+python -m unittest tests.test_workflows -v
 python -m unittest discover -s tests -v
 python -m compileall -q .
 git diff --check
@@ -228,7 +304,7 @@ Expected: all PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/facebook-autobot.yml tests
+git add .github/workflows/facebook-autobot.yml tests/test_workflows.py
 git commit -m "ci: schedule content intelligence reports"
 ```
 
