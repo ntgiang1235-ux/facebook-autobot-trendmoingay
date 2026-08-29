@@ -1,9 +1,7 @@
 import os
 import random
 import re
-import sys
 import unicodedata
-import urllib.parse
 
 import autobot
 
@@ -28,7 +26,7 @@ def _photo_to_image(photo):
 
 
 def search_pexels_image(query):
-    """Tìm ảnh Pexels theo cách cũ: lấy ngẫu nhiên một ảnh từ kết quả."""
+    """Tìm ngẫu nhiên một ảnh Pexels từ tập kết quả phù hợp."""
     if not PEXELS_API_KEY:
         return None
 
@@ -55,49 +53,18 @@ def search_pexels_image(query):
         return None
 
 
-def search_bing_image(query):
-    """Fallback nếu Pexels không trả ảnh."""
-    try:
-        from bs4 import BeautifulSoup
-        import json
-
-        encoded = urllib.parse.quote(query)
-        url = f"https://www.bing.com/images/search?q={encoded}"
-        res = autobot.http.get(url, timeout=15)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
-        images = soup.find_all("a", class_="iusc")
-        random.shuffle(images)
-
-        for item in images[:10]:
-            raw = item.get("m")
-            if not raw:
-                continue
-            data = json.loads(raw)
-            image_url = data.get("murl")
-            if image_url and image_url.startswith("http"):
-                return {
-                    "url": image_url,
-                    "source": "bing",
-                    "attribution": "",
-                    "alt": "",
-                }
-    except Exception as e:
-        print(f"⚠️ Bing fallback lỗi: {e}")
-    return None
-
-
 def find_image(query):
+    """Chỉ dùng nguồn ảnh Pexels; không có ảnh thì caller sẽ đăng text-only."""
     image = search_pexels_image(query)
     if image:
         print("✅ Đã tìm ảnh từ Pexels.")
         return image
 
     if not PEXELS_API_KEY:
-        print("ℹ️ Chưa có PEXELS_API_KEY, tạm dùng Bing fallback.")
+        print("ℹ️ Chưa có PEXELS_API_KEY; sẽ đăng text-only.")
     else:
-        print("ℹ️ Pexels không có ảnh phù hợp, tạm dùng Bing fallback.")
-    return search_bing_image(query)
+        print("ℹ️ Pexels không có ảnh phù hợp; sẽ đăng text-only.")
+    return None
 
 
 def _normalize_words(text):
@@ -194,7 +161,7 @@ def search_relevant_recipe_image(dish):
         print(f"✅ Dùng ảnh recipe gần đúng nhất (score={best_score}).")
         return best_image
 
-    print("ℹ️ Không tìm được ảnh đủ liên quan trực tiếp tới món; chuyển sang fallback rộng.")
+    print("ℹ️ Không tìm được ảnh đủ liên quan trực tiếp tới món; chuyển sang fallback Pexels rộng.")
     return None
 
 
@@ -203,13 +170,12 @@ def find_recipe_image(dish):
     if exact:
         return exact
 
-    # Theo yêu cầu: nếu không có ảnh liên quan, vẫn dùng cơ chế ảnh rộng/ngẫu nhiên.
     fallback_queries = build_recipe_fallback_queries(dish)
     random.shuffle(fallback_queries)
     for query in fallback_queries:
         image = find_image(query)
         if image:
-            print(f"ℹ️ Recipe đang dùng ảnh fallback rộng: {query}")
+            print(f"ℹ️ Recipe đang dùng ảnh Pexels fallback rộng: {query}")
             return image
     return None
 
@@ -374,30 +340,9 @@ def recipe_job():
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit("Vui lòng truyền action")
-
-    action = sys.argv[1]
-    autobot.validate_runtime_config(action)
-
-    if action == "fun":
-        fun_job()
-    elif action == "recipe":
-        recipe_job()
-    elif action == "post":
-        autobot.single_post_job()
-    elif action == "summary":
-        autobot.daily_summary_job()
-    elif action == "finance":
-        autobot.financial_post_job()
-    elif action == "philosophy":
-        autobot.philosophy_post_job()
-    elif action == "reply":
-        autobot.auto_reply_job()
-    elif action == "veo":
-        autobot.veo_prompt_job()
-    else:
-        raise SystemExit(f"Action không hợp lệ: {action}")
+    raise SystemExit(
+        "runner.py là module legacy. Hãy chạy: python hardening_runner.py <action>"
+    )
 
 
 if __name__ == "__main__":
