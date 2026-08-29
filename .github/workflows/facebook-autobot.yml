@@ -122,10 +122,5 @@ jobs:
           echo "Selected action: $ACTION"
           echo "action=$ACTION" >> "$GITHUB_OUTPUT"
 
-      - name: Run video bot
-        if: steps.select_action.outputs.action == 'video'
-        run: python safe_video_runner.py run
-
-      - name: Run text/image bot
-        if: steps.select_action.outputs.action != 'video'
-        run: python safe_runner.py "${{ steps.select_action.outputs.action }}"
+      - name: Run bot action
+        run: python hardening_runner.py "${{ steps.select_action.outputs.action }}"
