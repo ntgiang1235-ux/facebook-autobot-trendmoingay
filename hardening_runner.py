@@ -7,6 +7,7 @@ import autobot
 import autobotvideo
 import runner
 from app import db, notifications
+from app.http import secure_session_from
 from app.job_contract import JobOutcome, run_job
 
 VALID_ACTIONS = {
@@ -45,9 +46,11 @@ def make_run_key(action: str, started_at: str) -> str:
 
 
 def resolve_jobs() -> dict[str, Callable[[], object]]:
-    """Resolve legacy jobs while routing all Turso access through app.db."""
+    """Resolve legacy jobs through shared DB and TLS-verified HTTP clients."""
     autobot.execute_db = db.execute
     autobotvideo.db_execute = db.execute
+    autobot.http = secure_session_from(autobot.http)
+    autobotvideo.http = secure_session_from(autobotvideo.http)
 
     return {
         "post": autobot.single_post_job,
