@@ -46,10 +46,18 @@ def ensure_schema() -> None:
             status TEXT NOT NULL,
             started_at TEXT NOT NULL,
             finished_at TEXT,
-            detail TEXT
+            detail TEXT,
+            scheduled_for TEXT,
+            delay_minutes INTEGER
         )
         """
     )
+
+    columns = {row[1] for row in execute("PRAGMA table_info(job_runs)")}
+    if "scheduled_for" not in columns:
+        execute("ALTER TABLE job_runs ADD COLUMN scheduled_for TEXT")
+    if "delay_minutes" not in columns:
+        execute("ALTER TABLE job_runs ADD COLUMN delay_minutes INTEGER")
 
 
 def record_job(
@@ -59,17 +67,33 @@ def record_job(
     started_at: str,
     finished_at: str | None = None,
     detail: str = "",
+    scheduled_for: str | None = None,
+    delay_minutes: int | None = None,
 ) -> None:
     execute(
         """
-        INSERT INTO job_runs (run_key, action, status, started_at, finished_at, detail)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO job_runs (
+            run_key, action, status, started_at, finished_at, detail,
+            scheduled_for, delay_minutes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(run_key) DO UPDATE SET
             action = excluded.action,
             status = excluded.status,
             started_at = excluded.started_at,
             finished_at = excluded.finished_at,
-            detail = excluded.detail
+            detail = excluded.detail,
+            scheduled_for = excluded.scheduled_for,
+            delay_minutes = excluded.delay_minutes
         """,
-        (run_key, action, status, started_at, finished_at, detail),
+        (
+            run_key,
+            action,
+            status,
+            started_at,
+            finished_at,
+            detail,
+            scheduled_for,
+            delay_minutes,
+        ),
     )
