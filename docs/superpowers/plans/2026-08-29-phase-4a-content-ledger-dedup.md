@@ -44,24 +44,27 @@
 - [ ] **Step 1: Write the failing model test**
 
 ```python
+import unittest
+
 from app.content_models import ContentCandidate
 
 
-def test_content_candidate_keeps_strategy_metadata():
-    item = ContentCandidate(
-        category="finance",
-        topic_key="gold-price",
-        topic_text="Giá vàng tăng",
-        content_text="Nội dung",
-        source_url="https://example.test/a",
-        source_title="Giá vàng",
-        hook_type="number",
-        style_type="explanatory",
-        cta_type="opinion_question",
-        format_type="text",
-    )
-    assert item.category == "finance"
-    assert item.topic_key == "gold-price"
+class ContentModelTests(unittest.TestCase):
+    def test_content_candidate_keeps_strategy_metadata(self):
+        item = ContentCandidate(
+            category="finance",
+            topic_key="gold-price",
+            topic_text="Giá vàng tăng",
+            content_text="Nội dung",
+            source_url="https://example.test/a",
+            source_title="Giá vàng",
+            hook_type="number",
+            style_type="explanatory",
+            cta_type="opinion_question",
+            format_type="text",
+        )
+        self.assertEqual("finance", item.category)
+        self.assertEqual("gold-price", item.topic_key)
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
