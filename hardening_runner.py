@@ -46,6 +46,14 @@ def make_run_key(action: str, started_at: str) -> str:
     return f"local-{action}-{safe_time}"
 
 
+def _validated_text_job(action: str, job_fn: Callable[[], object]) -> Callable[[], object]:
+    def validated():
+        autobot.validate_runtime_config(action)
+        return job_fn()
+
+    return validated
+
+
 def resolve_jobs() -> dict[str, Callable[[], object]]:
     """Resolve jobs through shared DB, verified HTTP and legacy outcome adapters."""
     autobot.execute_db = db.execute
@@ -53,7 +61,7 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
     autobot.http = secure_session_from(autobot.http)
     autobotvideo.http = secure_session_from(autobotvideo.http)
 
-    return {
+    text_jobs = {
         "post": adapt_publish_job(
             autobot.single_post_job,
             autobot,
@@ -82,8 +90,14 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
         "veo": autobot.veo_prompt_job,
         "recipe": runner.recipe_job,
         "fun": runner.fun_job,
-        "video": lambda: autobotvideo.video_post_job(dry_run=False),
     }
+
+    jobs = {
+        action: _validated_text_job(action, job_fn)
+        for action, job_fn in text_jobs.items()
+    }
+    jobs["video"] = lambda: autobotvideo.video_post_job(dry_run=False)
+    return jobs
 
 
 def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None) -> JobOutcome:
