@@ -49,7 +49,7 @@ from app.quality import QualityRubric, combine_quality_score, decision_for_score
 
 def test_weighted_quality_score():
     rubric = QualityRubric(80, 70, 90, 80, 80, 70)
-    assert combine_quality_score(rubric, []) == 79.5
+    assert combine_quality_score(rubric, []) == 79.0
 
 
 def test_thresholds():
@@ -130,7 +130,7 @@ git commit -m "feat: add bounded Gemini quality rubric"
 
 - [ ] **Step 1: Write failing tests**
 
-Assert schema has `style_registry(id, dimension, value, parent_value, status, created_at, promoted_at, retired_at)`. Seed hooks include `question`, `number`, `surprising_fact`, `direct_statement`, `contrast`, `curiosity`; tones include `concise_news`, `conversational`, `witty`, `explanatory`, `reflective`; CTA includes `opinion_question`, `choose_side`, `experience_share`, `save_for_later`, `no_cta`.
+Assert schema has `style_registry(id, dimension, value, parent_value, status, created_at, promoted_at, retired_at)`. Seed hooks include `question`, `number`, `surprising_fact`, `direct_statement`, `contrast`, `curiosity`; tones include `concise_news`, `conversational`, `witty`, `explanatory`, `reflective`; CTA include `opinion_question`, `choose_side`, `experience_share`, `save_for_later`, `no_cta`.
 
 - [ ] **Step 2: Verify RED**
 
