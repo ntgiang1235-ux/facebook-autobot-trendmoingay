@@ -103,6 +103,7 @@ git commit -m "feat: add adaptive kill switch policy"
 - Modify: `tests/test_strategy_repository.py`
 
 **Interfaces:**
+- Consumes Phase 4D `load_config(execute_fn)`, `save_config(execute_fn, config)`, `save_strategy_version(...)`, `load_strategy_version(execute_fn, version_id)`.
 - Produces `promote_last_good(execute_fn, version_id)`, `rollback_to_version(execute_fn, version_id) -> int`, `current_strategy_version(execute_fn) -> int`.
 
 - [ ] **Step 1: Write failing versioning tests**
@@ -118,20 +119,27 @@ Expected: FAIL for missing rollback functions.
 - [ ] **Step 3: Implement append-only rollback semantics**
 
 ```python
+from dataclasses import replace
+
+
 def rollback_to_version(execute_fn, version_id: int) -> int:
     source = load_strategy_version(execute_fn, version_id)
-    current = current_strategy_version(execute_fn)
+    config = load_config(execute_fn)
+    current = config.current_strategy_version
     new_version = save_strategy_version(
         execute_fn,
         source.payload,
         reason=f"automatic_rollback_from:{current}",
         is_last_good=False,
     )
-    save_config_value(execute_fn, "current_strategy_version", str(new_version))
+    save_config(
+        execute_fn,
+        replace(config, current_strategy_version=new_version),
+    )
     return new_version
 ```
 
-Never update old snapshot payloads. If copy/write fails, keep the existing current version and raise; implement the repository write sequence with the strongest transaction behavior supported by the existing libSQL abstraction.
+Never update old snapshot payloads. If copy/write fails, keep the existing current version and raise; implement the write sequence with the strongest transaction behavior supported by the existing libSQL abstraction.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -213,7 +221,8 @@ git commit -m "feat: detect adaptive strategy regressions"
 - Modify: `tests/test_notifications.py`
 
 **Interfaces:**
-- Produces `run_strategy_guard(dry_run: bool = False) -> GuardResult`, hardened action `strategy_guard`.
+- Produces `load_regression_input(execute_fn, now) -> RegressionInput`.
+- Produces `run_strategy_guard(dry_run: bool = False) -> GuardResult` and hardened action `strategy_guard`.
 
 - [ ] **Step 1: Write failing guard tests**
 
@@ -225,11 +234,14 @@ Run: `python -m unittest tests.test_verification_runner tests.test_hardening_run
 
 Expected: FAIL because guard is missing.
 
-- [ ] **Step 3: Implement guard**
+- [ ] **Step 3: Implement guard and loader**
+
+`load_regression_input()` reads the current strategy version, last-good version, comparable 7-day recent/baseline final-score windows, mature sample count, and metric capability sets from Phase 4C/4D repositories. It returns one `RegressionInput`; no decision is made inside the loader.
 
 ```python
 def run_strategy_guard(dry_run: bool = False):
-    data = load_regression_input(db.execute)
+    now = datetime.now(timezone.utc)
+    data = load_regression_input(db.execute, now)
     decision = regression.evaluate_regression(data)
     if not decision.rollback:
         return GuardResult("ok", decision.reason, None)
@@ -267,6 +279,7 @@ git commit -m "feat: guard and rollback adaptive strategy"
 - Modify: `tests/test_verification_runner.py`
 
 **Interfaces:**
+- Produces private checks `check_schema`, `check_strategy_versions`, `check_daily_plan`, `check_metrics_maturity`, `check_strategy_weights`.
 - Produces `verify_adaptive_state(execute_fn, now) -> VerificationReport`, hardened action `verify_adaptive`.
 
 - [ ] **Step 1: Write failing verification tests**
@@ -292,7 +305,7 @@ def verify_adaptive_state(execute_fn, now) -> VerificationReport:
     return VerificationReport(tuple(checks))
 ```
 
-`verify_adaptive` must not mutate production state. Fail the hardened job only when at least one check has status `FAIL`; warnings remain visible but non-fatal.
+Each private check returns named `VerificationCheck(status, name, detail)` records. `verify_adaptive` must not mutate production state. Fail the hardened job only when at least one check has status `FAIL`; warnings remain visible but non-fatal.
 
 - [ ] **Step 4: Verify GREEN**
 
