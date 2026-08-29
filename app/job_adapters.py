@@ -133,3 +133,53 @@ def adapt_reply_job(job_fn: Callable[[], object], module: object) -> Callable[[]
         return success()
 
     return adapted
+
+
+def adapt_delivery_job(
+    job_fn: Callable[[], object],
+    module: object,
+    *,
+    allow_skip: bool = False,
+) -> Callable[[], JobOutcome]:
+    """Make generate-and-deliver legacy jobs observable without rewriting them."""
+
+    def adapted() -> JobOutcome:
+        original_gemini = module.call_gemini
+        original_delivery = module.send_tele
+        gemini_failure = False
+        delivery_attempted = False
+        delivery_success = False
+
+        def tracked_gemini(prompt, timeout=30):
+            nonlocal gemini_failure
+            result = original_gemini(prompt, timeout=timeout)
+            if not result:
+                gemini_failure = True
+            return result
+
+        def tracked_delivery(message):
+            nonlocal delivery_attempted, delivery_success
+            delivery_attempted = True
+            result = original_delivery(message)
+            delivery_success = result is True
+            return result
+
+        module.call_gemini = tracked_gemini
+        module.send_tele = tracked_delivery
+        try:
+            job_fn()
+        finally:
+            module.call_gemini = original_gemini
+            module.send_tele = original_delivery
+
+        if gemini_failure and not delivery_success:
+            raise RuntimeError("Gemini returned no content before delivery")
+        if delivery_attempted and not delivery_success:
+            raise RuntimeError("Telegram delivery failed")
+        if delivery_success:
+            return success()
+        if allow_skip:
+            return skipped("no delivery was needed")
+        raise RuntimeError("job completed without a delivery")
+
+    return adapted
