@@ -1,0 +1,52 @@
+name: Hardening 2 One-shot Patch
+
+on:
+  push:
+    branches:
+      - codex/hardening-2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'chore: apply hardening phase 2 patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: codex/hardening-2
+          fetch-depth: 0
+      - name: Apply targeted source hardening
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('autobot.py')
+          text = path.read_text(encoding='utf-8')
+          original = text
+
+          expected = {
+              'import urllib3\n': 1,
+              'urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)\n': 1,
+              ', verify=False': 2,
+          }
+          for needle, count in expected.items():
+              actual = text.count(needle)
+              if actual != count:
+                  raise SystemExit(f'Expected {count} occurrences of {needle!r}, found {actual}')
+
+          text = text.replace('import urllib3\n', '')
+          text = text.replace('urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)\n', '')
+          text = text.replace(', verify=False', '')
+
+          if text == original:
+              raise SystemExit('No source changes applied')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add autobot.py
+          git commit -m "fix: remove legacy TLS bypass"
+          git push origin HEAD:codex/hardening-2
