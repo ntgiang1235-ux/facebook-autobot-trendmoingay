@@ -18,7 +18,11 @@ def send_message(message: str) -> bool:
     try:
         response = http.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message},
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML",
+            },
             timeout=15,
         )
         response.raise_for_status()
