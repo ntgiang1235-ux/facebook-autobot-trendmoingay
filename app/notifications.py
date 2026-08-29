@@ -43,3 +43,22 @@ def send_failure(action: str, error: Exception, run_url: str | None = None) -> b
     if run_url:
         lines.extend(["", f"GitHub Run: {escape(run_url)}"])
     return send_message("\n".join(lines))
+
+
+def send_stale(
+    action: str,
+    scheduled_for: str,
+    delay_minutes: int,
+    run_url: str | None = None,
+) -> bool:
+    lines = [
+        "⏰ AUTOBOT SCHEDULE SKIPPED",
+        "",
+        f"Job: {escape(action)}",
+        f"Scheduled: {escape(scheduled_for)}",
+        f"Delay: {delay_minutes} minutes",
+        "Reason: delayed more than 60 minutes",
+    ]
+    if run_url:
+        lines.extend(["", f"GitHub Run: {escape(run_url)}"])
+    return send_message("\n".join(lines))
