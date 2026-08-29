@@ -91,7 +91,7 @@ git commit -m "feat: add atomic daily plan storage"
 - Test: `tests/test_planner.py`
 
 **Interfaces:**
-- Produces `volume_bounds(baseline: int) -> tuple[int,int]`, `build_daily_plan(plan_date, config, category_stats, time_stats, rng) -> list[PlannedSlot]`.
+- Produces `volume_bounds(baseline: int) -> tuple[int,int]`, `build_daily_plan(plan_date, config, category_stats, time_stats, rng) -> list[PlanSlot]`.
 
 - [ ] **Step 1: Write failing planner tests**
 
