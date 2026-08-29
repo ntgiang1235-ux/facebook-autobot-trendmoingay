@@ -1,7 +1,11 @@
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 import runner
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class RecipeHelperTests(unittest.TestCase):
@@ -24,14 +28,14 @@ class RecipeHelperTests(unittest.TestCase):
         self.assertFalse(all("vietnam" in q.lower() for q in queries))
 
     def test_find_image_returns_none_when_pexels_has_no_image(self):
-        sentinel = {"url": "https://unlicensed.example/image.jpg", "source": "bing"}
-        with patch.object(runner, "search_pexels_image", return_value=None), patch.object(
-            runner, "search_bing_image", return_value=sentinel
-        ) as bing:
+        with patch.object(runner, "search_pexels_image", return_value=None):
             result = runner.find_image("rare dish")
-
         self.assertIsNone(result)
-        bing.assert_not_called()
+
+    def test_runner_contains_no_bing_image_fallback(self):
+        source = (ROOT / "runner.py").read_text(encoding="utf-8").lower()
+        self.assertNotIn("bing.com/images", source)
+        self.assertNotIn("search_bing_image", source)
 
 
 if __name__ == "__main__":
