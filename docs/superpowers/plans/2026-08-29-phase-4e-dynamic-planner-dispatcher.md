@@ -33,7 +33,8 @@
 - Create `dispatcher_runner.py`: CLI entry point.
 - Modify `.github/workflows/facebook-autobot.yml`: add 30-minute dispatcher schedule and rollout switch; preserve fixed schedules during shadow stage.
 - Create `tests/test_planner.py`, `tests/test_plan_repository.py`, `tests/test_dispatcher.py`.
-- Modify `tests/test_hardening_runner.py` and static workflow tests.
+- Modify `tests/test_hardening_runner.py`.
+- Modify `tests/test_workflows.py` for dispatcher/cutover workflow assertions.
 
 ### Task 1: Add daily plan schema and repository
 
@@ -198,7 +199,8 @@ git commit -m "feat: route adaptive dispatcher through hardened runner"
 
 **Files:**
 - Modify: `.github/workflows/facebook-autobot.yml`
-- Modify/Create: workflow static test file under `tests/` following existing pattern.
+- Modify: `tests/test_workflows.py`
+- Modify: `dispatcher_runner.py`
 
 **Interfaces:**
 - GitHub cron: `*/30 * * * *`.
@@ -206,13 +208,13 @@ git commit -m "feat: route adaptive dispatcher through hardened runner"
 
 - [ ] **Step 1: Write failing workflow static tests**
 
-Assert one 30-minute cron exists; dispatcher runner is invoked only for that event; fixed production content crons remain during shadow mode; `shadow` cannot publish/claim live slots; `active` is an explicit config/env transition, not inferred automatically.
+Add tests to `tests/test_workflows.py` that load `.github/workflows/facebook-autobot.yml` using the existing `ROOT` pattern and assert: one `cron: "*/30 * * * *"` exists; `dispatcher_runner.py` is referenced; fixed production content crons remain during shadow mode; `ADAPTIVE_DISPATCH_MODE` is present; and shadow mode is explicit rather than inferred.
 
 - [ ] **Step 2: Verify RED**
 
-Run the repository's workflow/static test suite.
+Run: `python -m unittest tests.test_workflows -v`
 
-Expected: FAIL because dispatcher cron is absent.
+Expected: FAIL because dispatcher cron/config is absent.
 
 - [ ] **Step 3: Modify workflow and runner mode**
 
@@ -221,6 +223,7 @@ In shadow mode, build/read the proposed plan and log/report what would be due bu
 - [ ] **Step 4: Full verification**
 
 ```bash
+python -m unittest tests.test_workflows tests.test_dispatcher -v
 python -m unittest discover -s tests -v
 python -m compileall -q .
 git diff --check
@@ -231,7 +234,7 @@ Expected: all PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/facebook-autobot.yml dispatcher_runner.py tests
+git add .github/workflows/facebook-autobot.yml dispatcher_runner.py tests/test_workflows.py
 git commit -m "ci: add adaptive dispatcher shadow schedule"
 ```
 
@@ -239,7 +242,7 @@ git commit -m "ci: add adaptive dispatcher shadow schedule"
 
 **Files:**
 - Modify: `.github/workflows/facebook-autobot.yml`
-- Modify: rollout/static tests.
+- Modify: `tests/test_workflows.py`
 
 **Interfaces:**
 - Active dispatcher publishes adaptive slots.
@@ -247,24 +250,35 @@ git commit -m "ci: add adaptive dispatcher shadow schedule"
 
 - [ ] **Step 1: Add cutover tests**
 
-Assert `active` mode cannot coexist with old adaptive-content fixed crons in a way that could double-publish. Assert health/reply and non-content operations remain scheduled.
+Extend `tests/test_workflows.py` to assert active-mode workflow cannot contain the old adaptive-content fixed cron mappings in a way that can double-publish, while health/reply and non-content actions remain scheduled/manual as designed.
 
 - [ ] **Step 2: Verify tests fail against shadow config**
+
+Run: `python -m unittest tests.test_workflows -v`
 
 Expected: RED because fixed content crons still exist.
 
 - [ ] **Step 3: Perform cutover config**
 
-Remove only fixed content publishing schedules replaced by `daily_plan`; retain manual `workflow_dispatch` choices and non-adaptive operational actions. Set active mode through the chosen repository/environment configuration documented in deployment notes.
+Remove only fixed content publishing schedules replaced by `daily_plan`; retain manual `workflow_dispatch` choices and non-adaptive operational actions. Set active mode through the explicit rollout configuration defined in this plan.
 
 - [ ] **Step 4: Verify full suite and inspect workflow diff**
 
-Run full tests/compile/diff-check and manually confirm there is exactly one automated path capable of publishing each adaptive slot.
+Run:
+
+```bash
+python -m unittest tests.test_workflows -v
+python -m unittest discover -s tests -v
+python -m compileall -q .
+git diff --check
+```
+
+Then manually confirm there is exactly one automated path capable of publishing each adaptive slot.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/facebook-autobot.yml tests
+git add .github/workflows/facebook-autobot.yml tests/test_workflows.py
 git commit -m "ci: activate adaptive content dispatcher"
 ```
 
