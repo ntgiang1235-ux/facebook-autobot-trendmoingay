@@ -1,6 +1,8 @@
 import os
 import unittest
-from unittest.mock import patch
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import hardening_runner
 from app.http import VerifiedSession
@@ -21,13 +23,13 @@ class HardeningRunnerTests(unittest.TestCase):
             hardening_runner.db, "record_job", side_effect=lambda *args: records.append(args)
         ), patch.object(hardening_runner.notifications, "send_failure") as notify, patch.object(
             hardening_runner, "utc_now_iso", side_effect=["start", "finish"]
-        ), patch.dict(os.environ, {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"}, clear=False):
+        ), patch.dict(os.environ, {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "SCHEDULED_CRON": ""}, clear=False):
             outcome = hardening_runner.run_action("post", jobs=jobs)
 
         ensure_schema.assert_called_once()
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(records[0], ("123-1-post", "post", "started", "start", None, ""))
-        self.assertEqual(records[1], ("123-1-post", "post", "success", "start", "finish", ""))
+        self.assertEqual(records[0], ("123-1-post", "post", "started", "start", None, "", None, None))
+        self.assertEqual(records[1], ("123-1-post", "post", "success", "start", "finish", "", None, None))
         notify.assert_not_called()
 
     def test_skipped_result_is_recorded_without_failure(self):
@@ -37,11 +39,11 @@ class HardeningRunnerTests(unittest.TestCase):
             hardening_runner.db, "record_job", side_effect=lambda *args: records.append(args)
         ), patch.object(hardening_runner.notifications, "send_failure") as notify, patch.object(
             hardening_runner, "utc_now_iso", side_effect=["start", "finish"]
-        ), patch.dict(os.environ, {"GITHUB_RUN_ID": "124", "GITHUB_RUN_ATTEMPT": "1"}, clear=False):
+        ), patch.dict(os.environ, {"GITHUB_RUN_ID": "124", "GITHUB_RUN_ATTEMPT": "1", "SCHEDULED_CRON": ""}, clear=False):
             outcome = hardening_runner.run_action("summary", jobs=jobs)
 
         self.assertEqual(outcome.status, "skipped")
-        self.assertEqual(records[-1][-2:], ("finish", "not enough news"))
+        self.assertEqual(records[-1][4:6], ("finish", "not enough news"))
         notify.assert_not_called()
 
     def test_failure_records_failed_notifies_and_reraises(self):
@@ -55,18 +57,43 @@ class HardeningRunnerTests(unittest.TestCase):
         ), patch.object(hardening_runner.notifications, "send_failure") as notify, patch.object(
             hardening_runner, "utc_now_iso", side_effect=["start", "finish"]
         ), patch.object(hardening_runner, "github_run_url", return_value="https://github.com/run/1"), patch.dict(
-            os.environ, {"GITHUB_RUN_ID": "125", "GITHUB_RUN_ATTEMPT": "2"}, clear=False
+            os.environ, {"GITHUB_RUN_ID": "125", "GITHUB_RUN_ATTEMPT": "2", "SCHEDULED_CRON": ""}, clear=False
         ):
             with self.assertRaisesRegex(RuntimeError, "facebook failed"):
                 hardening_runner.run_action("video", jobs=jobs)
 
-        self.assertEqual(records[0], ("125-2-video", "video", "started", "start", None, ""))
-        self.assertEqual(records[-1], ("125-2-video", "video", "failed", "start", "finish", "facebook failed"))
+        self.assertEqual(records[0], ("125-2-video", "video", "started", "start", None, "", None, None))
+        self.assertEqual(records[-1], ("125-2-video", "video", "failed", "start", "finish", "facebook failed", None, None))
         notify.assert_called_once()
         args = notify.call_args.args
         self.assertEqual(args[0], "video")
         self.assertIn("facebook failed", str(args[1]))
         self.assertEqual(args[2], "https://github.com/run/1")
+
+    def test_stale_schedule_is_skipped_before_job_execution(self):
+        job = Mock()
+        records = []
+        scheduled_for = datetime(2026, 8, 29, 9, 7, tzinfo=timezone.utc)
+        meta = SimpleNamespace(scheduled_for=scheduled_for, delay_minutes=304, stale=True)
+
+        with patch.object(hardening_runner.db, "ensure_schema"), patch.object(
+            hardening_runner.db, "record_job", side_effect=lambda *args: records.append(args)
+        ), patch.object(hardening_runner.scheduler, "schedule_metadata", return_value=meta), patch.object(
+            hardening_runner.notifications, "send_stale"
+        ) as send_stale, patch.object(
+            hardening_runner, "utc_now_iso", side_effect=["start", "finish"]
+        ), patch.object(hardening_runner, "github_run_url", return_value="https://github.com/run/stale"), patch.dict(
+            os.environ,
+            {"GITHUB_RUN_ID": "126", "GITHUB_RUN_ATTEMPT": "1", "SCHEDULED_CRON": "7 9 * * *"},
+            clear=False,
+        ):
+            outcome = hardening_runner.run_action("recipe", jobs={"recipe": job})
+
+        self.assertEqual(outcome.status, "skipped")
+        self.assertIn("304", outcome.detail)
+        job.assert_not_called()
+        self.assertEqual(records[-1][-2:], (scheduled_for.isoformat(), 304))
+        send_stale.assert_called_once_with("recipe", scheduled_for.isoformat(), 304, "https://github.com/run/stale")
 
     def test_resolve_jobs_routes_shared_db_and_secure_http(self):
         with patch.object(hardening_runner.db, "execute") as execute:
@@ -77,8 +104,15 @@ class HardeningRunnerTests(unittest.TestCase):
             self.assertIsInstance(hardening_runner.autobotvideo.http, VerifiedSession)
         self.assertEqual(
             set(jobs),
-            {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video"},
+            {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video", "health"},
         )
+
+    def test_health_job_uses_shared_dependency_checks(self):
+        with patch.object(hardening_runner.health, "run_health_check", return_value=["turso"]) as check:
+            jobs = hardening_runner.resolve_jobs()
+            jobs["health"]()
+
+        check.assert_called_once()
 
     def test_resolve_jobs_wraps_legacy_false_green_actions(self):
         jobs = hardening_runner.resolve_jobs()
