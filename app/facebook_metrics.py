@@ -66,14 +66,20 @@ def _insight_value(payload: dict) -> int | None:
 
 
 def collect_post_metrics(http, post_id: str, access_token: str) -> CollectedMetrics:
-    response = http.get(
-        f"{GRAPH_BASE}/{post_id}",
-        params={
-            "fields": "reactions.limit(0).summary(true),comments.limit(0).summary(true),shares",
-            "access_token": access_token,
-        },
-        timeout=20,
-    )
+    try:
+        response = http.get(
+            f"{GRAPH_BASE}/{post_id}",
+            params={
+                "fields": "reactions.limit(0).summary(true),comments.limit(0).summary(true),shares",
+                "access_token": access_token,
+            },
+            timeout=20,
+        )
+    except Exception as exc:
+        raise FacebookMetricsError(
+            f"Facebook post metrics lỗi kết nối: {exc}"
+        ) from exc
+
     try:
         payload = response.json()
     except Exception as exc:
