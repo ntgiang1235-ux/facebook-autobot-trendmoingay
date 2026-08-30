@@ -1,4 +1,5 @@
 import json
+import math
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -25,8 +26,18 @@ class QualityDecision:
     reasons: tuple[str, ...] = ()
 
 
+def _finite_number(value: object, field: str = "value") -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be numeric")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be finite")
+    return number
+
+
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
-    return min(high, max(low, float(value)))
+    number = _finite_number(value)
+    return min(high, max(low, number))
 
 
 def combine_quality_score(rubric: QualityRubric, penalties: Iterable[float]) -> float:
@@ -38,7 +49,8 @@ def combine_quality_score(rubric: QualityRubric, penalties: Iterable[float]) -> 
         + _clamp(rubric.tone) * 0.10
         + _clamp(rubric.cta) * 0.10
     )
-    score = weighted + sum(float(penalty) for penalty in penalties)
+    penalty_total = sum(_finite_number(penalty, "penalty") for penalty in penalties)
+    score = weighted + penalty_total
     return round(_clamp(score), 2)
 
 
@@ -53,6 +65,10 @@ def decision_for_score(score: float, reasons: tuple[str, ...] = ()) -> QualityDe
     return QualityDecision(round(normalized, 2), action, reasons)
 
 
+def _reject_json_constant(value: str):
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
 def _parse_json_object(raw: str) -> dict:
     text = raw.strip()
     if text.startswith("```"):
@@ -62,7 +78,7 @@ def _parse_json_object(raw: str) -> dict:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-    parsed = json.loads(text)
+    parsed = json.loads(text, parse_constant=_reject_json_constant)
     if not isinstance(parsed, dict):
         raise ValueError("quality response must be a JSON object")
     return parsed
@@ -73,6 +89,10 @@ def _required_bool(data: dict, key: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{key} must be boolean")
     return value
+
+
+def _required_score(data: dict, key: str) -> float:
+    return _finite_number(data.get(key), key)
 
 
 def assess_draft(
@@ -108,12 +128,12 @@ def assess_draft(
         data = _parse_json_object(raw)
 
         rubric = QualityRubric(
-            novelty=float(data["novelty"]),
-            hook=float(data["hook"]),
-            usefulness=float(data["usefulness"]),
-            readability=float(data["readability"]),
-            tone=float(data["tone"]),
-            cta=float(data["cta"]),
+            novelty=_required_score(data, "novelty"),
+            hook=_required_score(data, "hook"),
+            usefulness=_required_score(data, "usefulness"),
+            readability=_required_score(data, "readability"),
+            tone=_required_score(data, "tone"),
+            cta=_required_score(data, "cta"),
         )
         reason = data.get("reason")
         if not isinstance(reason, str):
