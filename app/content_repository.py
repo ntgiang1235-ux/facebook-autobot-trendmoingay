@@ -33,6 +33,7 @@ def record_candidate(
         candidate.style_type,
         candidate.cta_type,
         candidate.format_type,
+        candidate.style_experiment_key,
         metadata.get("scheduled_for"),
         metadata.get("published_at"),
         metadata.get("strategy_mode", "baseline"),
@@ -48,11 +49,11 @@ def record_candidate(
         INSERT INTO content_posts (
             run_key, facebook_post_id, action, category, topic_key, topic_text,
             source_url, source_title, content_text, content_hash, hook_type,
-            style_type, cta_type, format_type, scheduled_for, published_at,
-            strategy_mode, quality_score, duplicate_score, strategy_version,
-            status, detail, created_at
+            style_type, cta_type, format_type, style_experiment_key,
+            scheduled_for, published_at, strategy_mode, quality_score,
+            duplicate_score, strategy_version, status, detail, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
         """,
         params,
