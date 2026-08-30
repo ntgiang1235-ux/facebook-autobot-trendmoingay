@@ -120,13 +120,17 @@ def _metric_summary(execute_fn, start_date: str, end_date: str):
     rows = execute_fn(
         """
         SELECT COUNT(*), AVG(cm.content_score),
-               SUM(CASE WHEN cm.reach IS NOT NULL THEN 1 ELSE 0 END),
-               SUM(CASE WHEN cm.impressions IS NOT NULL THEN 1 ELSE 0 END)
+               SUM(
+                   CASE
+                       WHEN cm.reach IS NOT NULL OR cm.impressions IS NOT NULL THEN 1
+                       ELSE 0
+                   END
+               )
         FROM content_metrics cm
         JOIN content_posts cp ON cp.facebook_post_id = cm.facebook_post_id
         WHERE cm.score_kind = 'final'
           AND cm.content_score IS NOT NULL
-          AND date(cp.published_at) BETWEEN date(?) AND date(?)
+          AND date(cp.published_at, '+7 hours') BETWEEN date(?) AND date(?)
         """,
         (start_date, end_date),
     )
@@ -135,13 +139,12 @@ def _metric_summary(execute_fn, start_date: str, end_date: str):
 
     count = int(rows[0][0] or 0)
     average = float(rows[0][1]) if rows[0][1] is not None else None
-    reach_count = int(rows[0][2] or 0)
-    impression_count = int(rows[0][3] or 0)
+    exposure_count = int(rows[0][2] or 0)
     if count == 0:
         warning = "chưa có final metrics"
-    elif reach_count == 0 and impression_count == 0:
+    elif exposure_count == 0:
         warning = "reach/impressions chưa khả dụng; đang dùng engagement fallback"
-    elif reach_count + impression_count < count:
+    elif exposure_count < count:
         warning = "reach/impressions chỉ khả dụng một phần"
     else:
         warning = None
@@ -156,7 +159,7 @@ def _category_ranking(execute_fn, start_date: str, end_date: str):
         JOIN content_posts cp ON cp.facebook_post_id = cm.facebook_post_id
         WHERE cm.score_kind = 'final'
           AND cm.content_score IS NOT NULL
-          AND date(cp.published_at) BETWEEN date(?) AND date(?)
+          AND date(cp.published_at, '+7 hours') BETWEEN date(?) AND date(?)
         GROUP BY cp.category
         ORDER BY avg_score DESC, cp.category ASC
         """,
