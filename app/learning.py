@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from statistics import median
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,13 @@ class LearningStat:
     mature_sample_count: int
     included_sample_count: int
     success_rate: float
+
+
+@dataclass(frozen=True)
+class WeightProposal:
+    proposed_weight: float
+    status: str
+    reason: str
 
 
 def recency_weight(age_days: float) -> float:
@@ -80,3 +88,101 @@ def aggregate_dimension(
         included_sample_count=len(included),
         success_rate=(success_weight / total_weight) if total_weight > 0 else 0.0,
     )
+
+
+def propose_weight(
+    current_weight: float,
+    score: float,
+    peer_scores: list[float],
+    mature_samples: int,
+    min_samples: int = 5,
+    floor: float = 0.01,
+) -> WeightProposal:
+    current = max(float(current_weight), floor)
+    if mature_samples < min_samples:
+        return WeightProposal(current, "insufficient_data", "fewer than 5 mature samples")
+    if not peer_scores:
+        return WeightProposal(current, "stable", "no peer baseline")
+
+    peers = [float(value) for value in peer_scores]
+    peer_median = float(median(peers))
+    if max(peers) - min(peers) <= 1e-9 and abs(float(score) - peer_median) <= 1e-9:
+        return WeightProposal(current, "stable", "peer scores are equal")
+
+    relative = (float(score) - peer_median) / max(abs(peer_median), 1.0)
+    bounded_delta = max(-0.20, min(0.20, relative))
+    if abs(bounded_delta) <= 1e-12:
+        return WeightProposal(current, "stable", "score matches peer median")
+
+    lower = max(floor, current * 0.80)
+    upper = max(lower, current * 1.20)
+    proposed = current * (1.0 + bounded_delta)
+    proposed = max(lower, min(upper, proposed))
+    return WeightProposal(proposed, "adjusted", "bounded relative performance update")
+
+
+def normalize_bounded_weights(
+    current_weights: dict[str, float],
+    proposed_weights: dict[str, float],
+    active_values: set[str] | None = None,
+    floor: float = 0.01,
+) -> dict[str, float]:
+    keys = list(current_weights)
+    active = set(keys) if active_values is None else set(active_values) & set(keys)
+    result = {key: 0.0 for key in keys}
+    if not active:
+        return result
+
+    lower: dict[str, float] = {}
+    upper: dict[str, float] = {}
+    working: dict[str, float] = {}
+    for key in active:
+        current = max(float(current_weights[key]), 0.0)
+        lower[key] = max(floor, current * 0.80)
+        upper[key] = max(lower[key], current * 1.20)
+        proposed = float(proposed_weights.get(key, current))
+        working[key] = max(lower[key], min(upper[key], proposed))
+
+    lower_sum = sum(lower.values())
+    upper_sum = sum(upper.values())
+    if lower_sum > 1.0 + 1e-12 or upper_sum < 1.0 - 1e-12:
+        # Suspension/activation can make the daily movement bounds infeasible.
+        # In that state normalize only the active pool; inactive values remain zero.
+        total = sum(max(working[key], floor) for key in active)
+        if total <= 0:
+            equal = 1.0 / len(active)
+            for key in active:
+                result[key] = equal
+            return result
+        for key in active:
+            result[key] = max(working[key], floor) / total
+        return result
+
+    total = sum(working.values())
+    residual = 1.0 - total
+    if residual > 1e-12:
+        headroom = {key: upper[key] - working[key] for key in active}
+        capacity = sum(headroom.values())
+        if capacity > 0:
+            for key in active:
+                working[key] += residual * (headroom[key] / capacity)
+    elif residual < -1e-12:
+        excess = -residual
+        reducible = {key: working[key] - lower[key] for key in active}
+        capacity = sum(reducible.values())
+        if capacity > 0:
+            for key in active:
+                working[key] -= excess * (reducible[key] / capacity)
+
+    # Remove floating-point residue without moving outside a valid bound.
+    residue = 1.0 - sum(working.values())
+    if abs(residue) > 1e-12:
+        for key in active:
+            candidate = working[key] + residue
+            if lower[key] - 1e-12 <= candidate <= upper[key] + 1e-12:
+                working[key] = candidate
+                break
+
+    for key in active:
+        result[key] = working[key]
+    return result
