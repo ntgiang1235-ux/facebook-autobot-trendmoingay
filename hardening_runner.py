@@ -20,6 +20,7 @@ from app import (
     publication_ledger,
     reporting,
     scheduler,
+    style_evolution,
     style_steering,
 )
 from app.http import secure_session_from
@@ -39,6 +40,7 @@ VALID_ACTIONS = {
     "health",
     "metrics",
     "learn",
+    "style_evolve",
     "planner",
     "dispatch",
     "report_daily",
@@ -237,6 +239,10 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
     )
     jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
     jobs["learn"] = lambda: feedback_loop.refresh_strategy(db.execute)
+    jobs["style_evolve"] = lambda: style_evolution.generate_next_experiment(
+        db.execute,
+        autobot.call_gemini,
+    )
     jobs["report_daily"] = lambda: reporting.send_daily_report(
         db.execute,
         notifications.send_message,
@@ -332,7 +338,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|planner|dispatch|report_daily|report_weekly>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|style_evolve|planner|dispatch|report_daily|report_weekly>"
         )
     run_action(sys.argv[1])
 
