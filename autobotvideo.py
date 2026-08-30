@@ -4,7 +4,7 @@ import random
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import libsql
 import requests
@@ -249,7 +249,10 @@ def upload_facebook(video_path: Path, caption: str) -> dict:
     return data
 
 
-def video_post_job(dry_run: bool = False) -> None:
+def video_post_job(
+    dry_run: bool = False,
+    on_published: Callable[..., object] | None = None,
+) -> None:
     validate_config(skip_fb=dry_run)
     init_db()
     log("🎬 Bắt đầu job video Pexels" + (" [DRY-RUN]" if dry_run else ""))
@@ -273,6 +276,15 @@ def video_post_job(dry_run: bool = False) -> None:
             return
 
         data = upload_facebook(TEMP_VIDEO, caption)
+        if on_published is not None:
+            on_published(
+                endpoint="me/videos",
+                request_data={"message": caption},
+                response=data,
+                topic_text=topic,
+                source_url=source_url,
+                format_type="video",
+            )
         save_posted(source_id, source_url, topic, creator)
         log(f"✅ Đăng video thành công! Facebook ID: {data['id']}")
         send_telegram(
