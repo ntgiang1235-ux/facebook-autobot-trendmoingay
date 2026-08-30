@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.content_models import ContentCandidate, RecentContent
 from app.content_pipeline import prepare_publishable_candidate
 from app.content_repository import content_hash
+from app.style_steering import restyle_candidate
 
 
 @dataclass(frozen=True)
@@ -76,8 +77,9 @@ def evaluate_request(
     recent: list[RecentContent],
     gemini_fn,
     now: datetime | None = None,
+    style_target=None,
 ) -> PrePublishDecision:
-    """Run the approved dedup + quality pipeline before a Facebook publish request."""
+    """Run optional learned restyling, then dedup + quality checks before publish."""
     del now  # reserved for future deterministic policy windows; recent is already bounded by caller.
     candidate = _candidate_from_request(action, endpoint, dict(request_data))
     if candidate is None:
@@ -91,6 +93,9 @@ def evaluate_request(
             detail="missing publishable message",
             candidate=None,
         )
+
+    if style_target is not None:
+        candidate = restyle_candidate(candidate, style_target, gemini_fn)
 
     result = prepare_publishable_candidate(
         candidate,
