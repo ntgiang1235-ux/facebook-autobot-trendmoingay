@@ -10,7 +10,7 @@ from app.learning import (
     propose_weight,
 )
 from app.learning_repository import LearningObservation, load_learning_observations
-from app.planner import BASELINE_SLOTS, CORE_ACTIONS, SAFE_TIME_BUCKETS
+from app.planner import BASELINE_SLOTS, CORE_ACTIONS, SAFE_TIME_BUCKETS, VIETNAM_TZ
 from app.strategy_models import StrategySnapshot, StrategyStat
 from app.strategy_repository import (
     load_config,
@@ -42,6 +42,26 @@ def _as_utc(value: datetime | None) -> datetime:
     if current.tzinfo is None:
         return current.replace(tzinfo=timezone.utc)
     return current.astimezone(timezone.utc)
+
+
+def _latest_version(execute_fn) -> tuple[int, datetime] | None:
+    rows = execute_fn(
+        """
+        SELECT version_id, created_at
+        FROM strategy_versions
+        ORDER BY version_id DESC
+        LIMIT 1
+        """,
+        (),
+    )
+    if not rows:
+        return None
+
+    version_id = int(rows[0][0])
+    created_at = datetime.fromisoformat(str(rows[0][1]))
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return version_id, created_at.astimezone(timezone.utc)
 
 
 def _baseline_category_weights() -> dict[str, float]:
@@ -261,10 +281,32 @@ def _regular_dimension_stats(raw_stats: list[StrategyStat]) -> list[StrategyStat
 
 
 def refresh_strategy(execute_fn, *, now: datetime | None = None) -> StrategyRefreshResult:
-    """Refresh strategy stats from scored adaptive publishes and version the result."""
+    """Refresh strategy stats at most once per Vietnam calendar day."""
     current = _as_utc(now)
-    observations = load_learning_observations(execute_fn, now=current)
     config = load_config(execute_fn)
+    latest = _latest_version(execute_fn)
+    if latest is not None:
+        latest_version_id, latest_created_at = latest
+        if latest_created_at.astimezone(VIETNAM_TZ).date() == current.astimezone(VIETNAM_TZ).date():
+            if (
+                config.current_strategy_version != latest_version_id
+                or config.last_good_strategy_version != latest_version_id
+            ):
+                save_config(
+                    execute_fn,
+                    replace(
+                        config,
+                        current_strategy_version=latest_version_id,
+                        last_good_strategy_version=latest_version_id,
+                    ),
+                )
+            return StrategyRefreshResult(
+                version_id=latest_version_id,
+                observation_count=0,
+                updated_stat_count=0,
+            )
+
+    observations = load_learning_observations(execute_fn, now=current)
     existing_stats = {
         (stat.dimension, stat.value): stat for stat in load_stats(execute_fn)
     }
