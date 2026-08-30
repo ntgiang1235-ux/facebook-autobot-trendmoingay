@@ -2,6 +2,20 @@ import unittest
 from unittest.mock import patch
 
 import hardening_runner
+from app.prepublish_guard import PrePublishDecision
+
+
+def allow_publish(endpoint, request_data):
+    del endpoint
+    return PrePublishDecision(
+        publish=True,
+        status="ready",
+        request_data=dict(request_data),
+        quality_score=80.0,
+        duplicate_score=0.1,
+        rewrite_count=0,
+        detail="test fixture ready",
+    )
 
 
 class ProductionLedgerWiringTests(unittest.TestCase):
@@ -20,6 +34,10 @@ class ProductionLedgerWiringTests(unittest.TestCase):
             hardening_runner.autobot,
             "call_fb_api",
             return_value=(200, {"id": "page_post_1"}),
+        ), patch.object(
+            hardening_runner,
+            "_adaptive_before_publish",
+            return_value=allow_publish,
         ), patch.object(
             hardening_runner.publication_ledger,
             "record_published_content",
