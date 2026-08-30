@@ -32,13 +32,16 @@ def record_published_content(
     source_url: str | None = None,
     source_title: str | None = None,
     format_type: str | None = None,
+    intelligence: object | None = None,
 ) -> int | None:
     """Persist one confirmed Facebook publish into the canonical content ledger.
 
-    Only explicit publication metadata is stored. Legacy jobs that do not expose
-    hook/style/CTA metadata retain the model defaults rather than inventing values.
-    Publishes outside dispatcher context are marked ``manual`` so later learning
-    can exclude them while metrics/reporting may still observe their performance.
+    Only explicit publication metadata is stored. When a validated pre-publish
+    decision is supplied, its final candidate and quality/duplicate scores are
+    preserved so later learning observes the exact content that Facebook saw.
+    Legacy jobs without intelligence metadata retain the model defaults rather
+    than inventing hook/style/CTA values. Publishes outside dispatcher context
+    are marked ``manual`` so adaptive learning can exclude them.
     """
     post_id = response.get("post_id") or response.get("id")
     if not post_id:
@@ -71,15 +74,33 @@ def record_published_content(
     )
     resolved_topic = (topic_text or source_title or content_text[:240]).strip()
 
-    candidate = ContentCandidate(
-        category=category,
-        topic_key=_topic_key(category, explicit_source, content_text),
-        topic_text=resolved_topic,
-        content_text=content_text,
-        source_url=explicit_source,
-        source_title=source_title,
-        format_type=resolved_format,
-    )
+    gate_candidate = getattr(intelligence, "candidate", None)
+    if isinstance(gate_candidate, ContentCandidate):
+        candidate = ContentCandidate(
+            category=category,
+            topic_key=gate_candidate.topic_key,
+            topic_text=gate_candidate.topic_text,
+            content_text=gate_candidate.content_text,
+            source_url=gate_candidate.source_url,
+            source_title=gate_candidate.source_title,
+            hook_type=gate_candidate.hook_type,
+            style_type=gate_candidate.style_type,
+            cta_type=gate_candidate.cta_type,
+            format_type=gate_candidate.format_type,
+        )
+    else:
+        candidate = ContentCandidate(
+            category=category,
+            topic_key=_topic_key(category, explicit_source, content_text),
+            topic_text=resolved_topic,
+            content_text=content_text,
+            source_url=explicit_source,
+            source_title=source_title,
+            format_type=resolved_format,
+        )
+
+    quality_score = getattr(intelligence, "quality_score", None)
+    duplicate_score = getattr(intelligence, "duplicate_score", None)
 
     return content_repository.record_candidate(
         execute_fn,
@@ -95,8 +116,8 @@ def record_published_content(
         strategy_mode=(
             active_context.strategy_mode if active_context is not None else "manual"
         ),
-        quality_score=None,
-        duplicate_score=None,
+        quality_score=quality_score,
+        duplicate_score=duplicate_score,
         strategy_version=(
             active_context.strategy_version if active_context is not None else None
         ),

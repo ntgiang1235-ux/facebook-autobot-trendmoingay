@@ -22,6 +22,7 @@ def adapt_publish_job(
     allow_skip: bool = False,
     on_published: Callable[[str, dict, dict], None] | None = None,
     before_publish: Callable[[str, dict], object] | None = None,
+    on_published_intelligence: Callable[[str, dict, dict, object], None] | None = None,
 ) -> Callable[[], JobOutcome]:
     """Turn a legacy publish job's print-and-return behavior into an explicit outcome.
 
@@ -29,10 +30,12 @@ def adapt_publish_job(
     operations such as seed comments remain best-effort after the primary post
     has succeeded. When supplied, ``before_publish`` can reject or rewrite the
     outbound primary request before any Facebook network call. ``on_published``
-    receives only a real successful Facebook publish.
+    receives only a real successful Facebook publish. The optional
+    ``on_published_intelligence`` callback additionally receives the accepted
+    pre-publish decision so the canonical ledger can persist quality metadata.
 
-    Publication metadata is captured inside the Facebook wrapper but the
-    callback itself runs only after the legacy job returns. This boundary is
+    Publication metadata is captured inside the Facebook wrapper but callbacks
+    themselves run only after the legacy job returns. This boundary is
     intentional: some legacy image helpers catch exceptions from a publish call
     and retry as text. A Turso/ledger exception must never be mistaken for a
     Facebook upload exception and trigger a duplicate publish.
@@ -53,6 +56,7 @@ def adapt_publish_job(
         primary_success = False
         primary_failure = None
         published_metadata = None
+        accepted_decision = None
         gemini_failed_before_publish = False
         prepublish_rejected = None
 
@@ -62,7 +66,8 @@ def adapt_publish_job(
             return 200, {"id": _PREPUBLISH_SKIP_ID}
 
         def tracked_fb(endpoint, data, files=None):
-            nonlocal primary_attempted, primary_success, primary_failure, published_metadata
+            nonlocal primary_attempted, primary_success, primary_failure
+            nonlocal published_metadata, accepted_decision
 
             # Once the primary request has been rejected, suppress every legacy
             # follow-up call (seed comments, fallbacks, etc.) until the job exits.
@@ -89,6 +94,7 @@ def adapt_publish_job(
                             return reject_prepublish("pre-publish check returned invalid request data")
                         outbound_data = dict(rewritten)
                         request_data = dict(rewritten)
+                        accepted_decision = decision
                     except Exception as error:
                         return reject_prepublish(f"pre-publish check failed: {error}")
 
@@ -158,6 +164,12 @@ def adapt_publish_job(
         if primary_success:
             if on_published is not None and published_metadata is not None:
                 on_published(*published_metadata)
+            if (
+                on_published_intelligence is not None
+                and published_metadata is not None
+                and accepted_decision is not None
+            ):
+                on_published_intelligence(*published_metadata, accepted_decision)
             return success()
 
         if allow_skip and not primary_attempted:
