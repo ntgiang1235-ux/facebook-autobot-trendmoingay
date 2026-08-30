@@ -7,7 +7,7 @@ import autobot
 import autobotvideo
 import metrics_runner
 import runner
-from app import db, health, notifications, scheduler
+from app import adaptive_jobs, db, dispatcher, health, notifications, scheduler
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
 from app.job_contract import JobOutcome, run_job, skipped
@@ -24,7 +24,17 @@ VALID_ACTIONS = {
     "video",
     "health",
     "metrics",
+    "planner",
+    "dispatch",
 }
+ADAPTIVE_CONTENT_ACTIONS = (
+    "post",
+    "finance",
+    "philosophy",
+    "fun",
+    "recipe",
+    "video",
+)
 
 
 def utc_now_iso() -> str:
@@ -61,7 +71,7 @@ def _runner_primary_publish(endpoint: str) -> bool:
     return endpoint in {"me/feed", "me/photos"}
 
 
-def resolve_jobs() -> dict[str, Callable[[], object]]:
+def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], object]]:
     """Resolve jobs through shared DB, verified HTTP and explicit outcome adapters."""
     autobot.execute_db = db.execute
     autobotvideo.db_execute = db.execute
@@ -125,6 +135,20 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
         db.execute,
     )
     jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
+
+    adaptive_content_jobs = {
+        action: jobs[action]
+        for action in ADAPTIVE_CONTENT_ACTIONS
+    }
+    jobs["planner"] = lambda: adaptive_jobs.create_daily_plan(db.execute)
+    jobs["dispatch"] = lambda: dispatcher.dispatch_due(
+        db.execute,
+        adaptive_content_jobs,
+        run_key=(
+            dispatch_run_key
+            or make_run_key("dispatch", utc_now_iso())
+        ),
+    )
     return jobs
 
 
@@ -132,13 +156,13 @@ def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None)
     if action not in VALID_ACTIONS:
         raise ValueError(f"Action không hợp lệ: {action}")
 
+    started_at = utc_now_iso()
+    run_key = make_run_key(action, started_at)
     if jobs is None:
-        jobs = resolve_jobs()
+        jobs = resolve_jobs(dispatch_run_key=run_key)
     if action not in jobs:
         raise ValueError(f"Action không hợp lệ: {action}")
 
-    started_at = utc_now_iso()
-    run_key = make_run_key(action, started_at)
     meta = scheduler.schedule_metadata(os.getenv("SCHEDULED_CRON", ""))
     scheduled_for = meta.scheduled_for.isoformat() if meta.scheduled_for else None
 
@@ -198,7 +222,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|planner|dispatch>"
         )
     run_action(sys.argv[1])
 
