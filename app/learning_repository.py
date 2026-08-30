@@ -42,16 +42,27 @@ def _time_bucket(scheduled_for: str | None) -> str | None:
     return _parse_utc(scheduled_for).astimezone(VIETNAM_TZ).strftime("%H:%M")
 
 
+def _has_experiment_column(execute_fn) -> bool:
+    try:
+        rows = execute_fn("PRAGMA table_info(content_posts)", ())
+    except Exception:
+        return False
+    return any(len(row) > 1 and str(row[1]) == "style_experiment_key" for row in rows)
+
+
 def load_learning_observations(execute_fn, *, now: datetime | None = None) -> list[LearningObservation]:
     """Load only adaptive, scored publishes inside the approved 14-day window."""
     current = _as_utc(now)
     cutoff = current - timedelta(days=LEARNING_WINDOW_DAYS)
+    experiment_expr = (
+        "cp.style_experiment_key" if _has_experiment_column(execute_fn) else "NULL"
+    )
     rows = execute_fn(
-        """
+        f"""
         SELECT cp.facebook_post_id, cp.category, cp.scheduled_for,
                cp.hook_type, cp.style_type, cp.cta_type, cp.format_type,
                cm.content_score, cm.score_kind, cp.published_at,
-               cp.style_experiment_key
+               {experiment_expr}
         FROM content_posts cp
         JOIN content_metrics cm
           ON cm.facebook_post_id = cp.facebook_post_id
