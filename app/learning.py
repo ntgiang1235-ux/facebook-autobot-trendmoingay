@@ -1,6 +1,8 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import median
+
+from app.strategy_models import StrategyStat
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,16 @@ class LearningStat:
 class WeightProposal:
     proposed_weight: float
     status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class CategoryDecision:
+    status: str
+    normal_allocation_eligible: bool
+    retest_eligible: bool
+    proposed_weight: float
+    retest_after: datetime | None
     reason: str
 
 
@@ -174,7 +186,6 @@ def normalize_bounded_weights(
             for key in active:
                 working[key] -= excess * (reducible[key] / capacity)
 
-    # Remove floating-point residue without moving outside a valid bound.
     residue = 1.0 - sum(working.values())
     if abs(residue) > 1e-12:
         for key in active:
@@ -186,3 +197,90 @@ def normalize_bounded_weights(
     for key in active:
         result[key] = working[key]
     return result
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
+
+
+def _is_persistently_weak(stat: StrategyStat, peer_median: float) -> bool:
+    threshold = float(peer_median) * 0.75
+    return (
+        stat.weighted_score_14d < threshold
+        and stat.recent_score_7d < threshold
+        and stat.success_rate < 0.40
+    )
+
+
+def evaluate_category_status(
+    stat: StrategyStat,
+    peer_median: float,
+    now: datetime,
+    auto_suspend_enabled: bool,
+    min_samples: int = 5,
+    suspension_days: int = 7,
+) -> CategoryDecision:
+    if stat.status == "suspended":
+        retest_after = _parse_iso(stat.retest_after)
+        if retest_after is None:
+            retest_after = now + timedelta(days=suspension_days)
+            return CategoryDecision(
+                "suspended", False, False, 0.0, retest_after,
+                "missing retest date renewed conservatively",
+            )
+
+        if now < retest_after:
+            return CategoryDecision(
+                "suspended", False, False, 0.0, retest_after,
+                "suspension window still active",
+            )
+
+        last_used_at = _parse_iso(stat.last_used_at)
+        retest_completed = last_used_at is not None and last_used_at >= retest_after
+        if not retest_completed:
+            return CategoryDecision(
+                "suspended", False, True, 0.0, retest_after,
+                "controlled retest is due",
+            )
+
+        recovered = (
+            stat.recent_score_7d >= float(peer_median) * 0.90
+            and stat.success_rate >= 0.50
+        )
+        if recovered:
+            return CategoryDecision(
+                "active", True, False, 0.05, None,
+                "completed retest recovered category",
+            )
+
+        renewed = now + timedelta(days=suspension_days)
+        return CategoryDecision(
+            "suspended", False, False, 0.0, renewed,
+            "completed retest remained weak",
+        )
+
+    if stat.sample_count < min_samples:
+        return CategoryDecision(
+            "insufficient_data", True, False, stat.current_weight, None,
+            "fewer than 5 mature samples",
+        )
+
+    if not auto_suspend_enabled:
+        return CategoryDecision(
+            "active", True, False, stat.current_weight, None,
+            "automatic suspension disabled",
+        )
+
+    if _is_persistently_weak(stat, peer_median):
+        return CategoryDecision(
+            "suspended", False, False, 0.0,
+            now + timedelta(days=suspension_days),
+            "persistent weakness across 14d and 7d windows",
+        )
+
+    return CategoryDecision(
+        "active", True, False, stat.current_weight, None,
+        "category remains eligible",
+    )
