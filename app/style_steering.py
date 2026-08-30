@@ -27,6 +27,7 @@ class StyleTarget:
     style_type: str | None
     cta_type: str | None
     mode: str
+    experiment_key: str | None = None
 
 
 def _mature_active(stats: list[StrategyStat], dimension: str) -> list[StrategyStat]:
@@ -122,7 +123,7 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
 
 
 def restyle_candidate(candidate: ContentCandidate, target: StyleTarget, gemini_fn) -> ContentCandidate:
-    """Restyle once while preserving factual content; quality classification stays authoritative."""
+    """Restyle once while preserving facts and separately track experiment exposure."""
     requirements = []
     if target.hook_type:
         requirements.append(f"Hook type: {target.hook_type}")
@@ -154,4 +155,5 @@ def restyle_candidate(candidate: ContentCandidate, target: StyleTarget, gemini_f
         topic_key=content_hash(candidate.source_url or text),
         topic_text=text,
         content_text=text,
+        style_experiment_key=target.experiment_key,
     )
