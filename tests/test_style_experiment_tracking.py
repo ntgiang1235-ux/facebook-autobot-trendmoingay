@@ -124,6 +124,11 @@ class StyleExperimentTrackingTests(unittest.TestCase):
 
     def test_learning_observation_exposes_experiment_key_for_lifecycle_scoring(self):
         def execute(query, params=()):
+            if "PRAGMA table_info(content_posts)" in query:
+                return [
+                    (0, "id", "INTEGER", 0, None, 1),
+                    (1, "style_experiment_key", "TEXT", 0, None, 0),
+                ]
             if "FROM content_posts cp" in query:
                 return [
                     (
