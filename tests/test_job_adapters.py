@@ -36,6 +36,67 @@ class JobAdapterTests(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
 
+    def test_primary_publish_calls_metadata_callback_once(self):
+        module = FakeModule()
+        payload = {"id": "123_456"}
+        module.fb_responses = [(200, payload)]
+        published = []
+
+        def legacy_job():
+            module.call_fb_api("me/feed", {"message": "hello"})
+
+        outcome = adapt_publish_job(
+            legacy_job,
+            module,
+            lambda endpoint: endpoint == "me/feed",
+            on_published=lambda endpoint, response: published.append((endpoint, response)),
+        )()
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(published, [("me/feed", payload)])
+
+    def test_follow_up_comment_does_not_trigger_metadata_callback(self):
+        module = FakeModule()
+        primary = {"id": "123_456"}
+        module.fb_responses = [
+            (200, primary),
+            (200, {"id": "comment-1"}),
+        ]
+        published = []
+
+        def legacy_job():
+            module.call_fb_api("me/feed", {"message": "hello"})
+            module.call_fb_api("123_456/comments", {"message": "seed"})
+
+        outcome = adapt_publish_job(
+            legacy_job,
+            module,
+            lambda endpoint: endpoint == "me/feed",
+            on_published=lambda endpoint, response: published.append((endpoint, response)),
+        )()
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(published, [("me/feed", primary)])
+
+    def test_metadata_callback_failure_is_not_swallowed(self):
+        module = FakeModule()
+        module.fb_responses = [(200, {"id": "123_456"})]
+
+        def legacy_job():
+            module.call_fb_api("me/feed", {"message": "hello"})
+
+        def broken_callback(endpoint, payload):
+            raise RuntimeError("ledger write failed")
+
+        job = adapt_publish_job(
+            legacy_job,
+            module,
+            lambda endpoint: endpoint == "me/feed",
+            on_published=broken_callback,
+        )
+        with self.assertRaisesRegex(RuntimeError, "ledger write failed"):
+            job()
+
     def test_primary_publish_failure_becomes_exception(self):
         module = FakeModule()
         module.fb_responses = [(500, {"error": "facebook down"})]
