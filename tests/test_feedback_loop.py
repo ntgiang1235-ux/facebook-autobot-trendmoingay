@@ -2,7 +2,15 @@ import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from app.strategy_models import AdaptiveConfig
+
+BASELINE_CATEGORY_WEIGHTS = {
+    "post": 4 / 12,
+    "finance": 1 / 12,
+    "philosophy": 1 / 12,
+    "fun": 2 / 12,
+    "recipe": 1 / 12,
+    "video": 3 / 12,
+}
 
 
 class AdaptiveFeedbackLoopTests(unittest.TestCase):
@@ -114,19 +122,23 @@ class AdaptiveFeedbackLoopTests(unittest.TestCase):
         result = refresh_strategy(self.execute, now=now)
 
         self.assertEqual(result.version_id, 1)
-        self.assertGreaterEqual(result.observation_count, 15)
+        self.assertEqual(result.observation_count, 15)
         category_rows = self.execute(
             "SELECT value, sample_count, weighted_score_14d, current_weight, status FROM strategy_stats WHERE dimension='category' ORDER BY value"
         )
         by_value = {row[0]: row for row in category_rows}
+        self.assertEqual(set(by_value), set(BASELINE_CATEGORY_WEIGHTS))
         self.assertEqual(by_value["finance"][1], 5)
         self.assertAlmostEqual(by_value["finance"][2], 80.0, places=6)
         self.assertAlmostEqual(by_value["post"][2], 40.0, places=6)
-        self.assertGreater(by_value["finance"][3], by_value["video"][3])
-        self.assertGreater(by_value["video"][3], by_value["post"][3])
+        self.assertEqual(by_value["philosophy"][1], 0)
+        self.assertEqual(by_value["philosophy"][4], "insufficient_data")
+        self.assertGreater(by_value["finance"][3], BASELINE_CATEGORY_WEIGHTS["finance"])
+        self.assertLess(by_value["post"][3], BASELINE_CATEGORY_WEIGHTS["post"])
         self.assertAlmostEqual(sum(row[3] for row in category_rows), 1.0, places=6)
-        # No category may move more than ±20% from the equal first-run seed.
-        self.assertTrue(all((1 / 3) * 0.80 - 1e-9 <= row[3] <= (1 / 3) * 1.20 + 1e-9 for row in category_rows))
+        for value, baseline in BASELINE_CATEGORY_WEIGHTS.items():
+            self.assertGreaterEqual(by_value[value][3], baseline * 0.80 - 1e-9)
+            self.assertLessEqual(by_value[value][3], baseline * 1.20 + 1e-9)
 
         [config_row] = self.execute(
             "SELECT current_strategy_version, last_good_strategy_version FROM adaptive_config WHERE id=1"
@@ -183,9 +195,11 @@ class AdaptiveFeedbackLoopTests(unittest.TestCase):
 
         hook_values = self.execute("SELECT value FROM strategy_stats WHERE dimension='hook_type'")
         style_values = self.execute("SELECT value FROM strategy_stats WHERE dimension='style_type'")
+        cta_values = self.execute("SELECT value FROM strategy_stats WHERE dimension='cta_type'")
         format_values = self.execute("SELECT value FROM strategy_stats WHERE dimension='format_type'")
         self.assertEqual(hook_values, [])
         self.assertEqual(style_values, [])
+        self.assertEqual(cta_values, [])
         self.assertEqual(format_values, [("photo",)])
 
 
