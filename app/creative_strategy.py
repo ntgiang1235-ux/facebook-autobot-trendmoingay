@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import hashlib
 import random
+import re
 
 from app.publication_context import current_publication_context
 from app.selection import (
@@ -178,6 +179,26 @@ def current_creative_prompt_suffix() -> str:
     )
 
 
+def _remove_legacy_conflicts(text: str, matched_marker: str) -> str:
+    """Remove only fixed legacy instructions that contradict adaptive controls."""
+    if matched_marker == "Viết status FB cho tin:":
+        text = text.replace(
+            "Tóm tắt sắc sảo, hóm hỉnh, <250 chữ. Kết bài bằng 1 câu hỏi.",
+            "Tóm tắt <250 chữ theo chỉ dẫn phong cách adaptive bên dưới. "
+            "Kết bài theo chỉ dẫn CTA adaptive bên dưới.",
+        )
+    elif matched_marker == "cập nhật tỷ giá ngoại tệ":
+        text = text.replace(
+            "Giọng điệu chuyên nghiệp, nhận định nhanh gọn. "
+            "Kết thúc bằng câu hỏi mở về diễn biến thị trường và hashtag",
+            "Trình bày ngắn gọn theo chỉ dẫn phong cách adaptive bên dưới. "
+            "Kết bài theo chỉ dẫn CTA adaptive bên dưới. Giữ hashtag",
+        )
+    elif matched_marker == "status tấu hài":
+        text = re.sub(r"(?m)^Văn phong bắt buộc:[^\n]*(?:\n|$)", "", text)
+    return text
+
+
 def run_with_creative_prompt(job_fn, gemini_module, *, markers: tuple[str, ...]):
     """Append creative guidance only to the job's primary content-generation prompt."""
     original = gemini_module.call_gemini
@@ -185,7 +206,9 @@ def run_with_creative_prompt(job_fn, gemini_module, *, markers: tuple[str, ...])
     def targeted(prompt, *args, **kwargs):
         text = str(prompt)
         suffix = current_creative_prompt_suffix()
-        if suffix and any(marker in text for marker in markers):
+        matched_marker = next((marker for marker in markers if marker in text), None)
+        if suffix and matched_marker is not None:
+            text = _remove_legacy_conflicts(text, matched_marker)
             text = text + suffix
         return original(text, *args, **kwargs)
 
