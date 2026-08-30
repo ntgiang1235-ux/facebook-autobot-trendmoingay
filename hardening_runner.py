@@ -5,6 +5,7 @@ from typing import Callable
 
 import autobot
 import autobotvideo
+import metrics_runner
 import runner
 from app import db, health, notifications, scheduler
 from app.http import secure_session_from
@@ -22,6 +23,7 @@ VALID_ACTIONS = {
     "fun",
     "video",
     "health",
+    "metrics",
 }
 
 
@@ -122,6 +124,7 @@ def resolve_jobs() -> dict[str, Callable[[], object]]:
         autobot.call_gemini,
         db.execute,
     )
+    jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
     return jobs
 
 
@@ -195,7 +198,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics>"
         )
     run_action(sys.argv[1])
 
