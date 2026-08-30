@@ -114,6 +114,29 @@ class MetricsRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "không xử lý được post nào"):
                 metrics_runner.collect_due_metrics(now=self.now)
 
+    def test_unexpected_local_failure_is_not_swallowed_as_partial_api_failure(self):
+        import metrics_runner
+
+        due = [
+            DuePost(1, "post-1", "2026-08-29T11:00:00+00:00", "early"),
+            DuePost(2, "post-2", "2026-08-29T10:00:00+00:00", "early"),
+        ]
+        with patch.object(metrics_runner.db, "ensure_schema"), patch.object(
+            metrics_runner, "due_posts", return_value=due
+        ), patch.object(metrics_runner, "load_scoring_baseline", return_value=self.baseline), patch.object(
+            metrics_runner, "collect_post_metrics", return_value=self.metrics()
+        ), patch.object(
+            metrics_runner, "score_content", return_value=ScoreResult(50.0, "insufficient_baseline", {})
+        ), patch.object(
+            metrics_runner, "save_snapshot", side_effect=RuntimeError("database programming error")
+        ), patch.object(metrics_runner.notifications, "send_failure") as notify, patch.object(
+            metrics_runner.autobot, "FB_ACCESS_TOKEN", "token"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "database programming error"):
+                metrics_runner.collect_due_metrics(now=self.now)
+
+        notify.assert_not_called()
+
     def test_no_due_posts_is_successful_noop(self):
         import metrics_runner
 
