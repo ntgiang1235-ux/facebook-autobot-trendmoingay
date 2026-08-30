@@ -207,6 +207,32 @@ def ensure_schema() -> None:
         "ON strategy_versions(created_at)"
     )
 
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_plan (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_date TEXT NOT NULL,
+            slot_id TEXT NOT NULL,
+            planned_for TEXT NOT NULL,
+            action TEXT NOT NULL,
+            category TEXT NOT NULL,
+            strategy_mode TEXT NOT NULL DEFAULT 'baseline',
+            strategy_version INTEGER,
+            status TEXT NOT NULL DEFAULT 'planned',
+            claim_run_key TEXT,
+            claimed_at TEXT,
+            finished_at TEXT,
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(plan_date, slot_id)
+        )
+        """
+    )
+    execute(
+        "CREATE INDEX IF NOT EXISTS idx_daily_plan_due "
+        "ON daily_plan(plan_date, status, planned_for)"
+    )
+
 
 def record_job(
     run_key: str,

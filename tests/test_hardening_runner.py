@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import hardening_runner
 from app.http import VerifiedSession
-from app.job_contract import skipped
+from app.job_contract import skipped, success
 
 
 class HardeningRunnerTests(unittest.TestCase):
@@ -104,7 +104,10 @@ class HardeningRunnerTests(unittest.TestCase):
             self.assertIsInstance(hardening_runner.autobotvideo.http, VerifiedSession)
         self.assertEqual(
             set(jobs),
-            {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video", "health", "metrics"},
+            {
+                "post", "reply", "finance", "philosophy", "summary", "veo",
+                "recipe", "fun", "video", "health", "metrics", "planner", "dispatch"
+            },
         )
 
     def test_health_job_uses_shared_dependency_checks(self):
@@ -121,6 +124,49 @@ class HardeningRunnerTests(unittest.TestCase):
 
         collect.assert_called_once_with()
         self.assertEqual(result, {"due": 0, "processed": 0, "failed": 0})
+
+    def test_resolve_jobs_routes_planner_and_dispatcher_without_operational_jobs(self):
+        with patch.object(
+            hardening_runner.adaptive_jobs, "create_daily_plan", return_value=success("planned")
+        ) as create_plan, patch.object(
+            hardening_runner.dispatcher, "dispatch_due", return_value=skipped("no due plan slot")
+        ) as dispatch:
+            jobs = hardening_runner.resolve_jobs(dispatch_run_key="dispatch-owner")
+            planner_outcome = jobs["planner"]()
+            dispatch_outcome = jobs["dispatch"]()
+
+        self.assertEqual(planner_outcome.status, "success")
+        self.assertEqual(dispatch_outcome.status, "skipped")
+        create_plan.assert_called_once_with(hardening_runner.db.execute)
+        args = dispatch.call_args.args
+        kwargs = dispatch.call_args.kwargs
+        self.assertIs(args[0], hardening_runner.db.execute)
+        self.assertEqual(
+            set(args[1]),
+            {"post", "finance", "philosophy", "fun", "recipe", "video"},
+        )
+        self.assertEqual(kwargs["run_key"], "dispatch-owner")
+
+    def test_run_action_passes_outer_dispatch_run_key_to_resolver(self):
+        records = []
+        with patch.object(
+            hardening_runner,
+            "resolve_jobs",
+            return_value={"dispatch": lambda: skipped("no due plan slot")},
+        ) as resolve, patch.object(hardening_runner.db, "ensure_schema"), patch.object(
+            hardening_runner.db, "record_job", side_effect=lambda *args: records.append(args)
+        ), patch.object(
+            hardening_runner, "utc_now_iso", side_effect=["start", "finish"]
+        ), patch.dict(
+            os.environ,
+            {"GITHUB_RUN_ID": "777", "GITHUB_RUN_ATTEMPT": "2", "SCHEDULED_CRON": ""},
+            clear=False,
+        ):
+            outcome = hardening_runner.run_action("dispatch")
+
+        self.assertEqual(outcome.status, "skipped")
+        resolve.assert_called_once_with(dispatch_run_key="777-2-dispatch")
+        self.assertEqual(records[0][0], "777-2-dispatch")
 
     def test_resolve_jobs_wraps_legacy_false_green_actions(self):
         jobs = hardening_runner.resolve_jobs()

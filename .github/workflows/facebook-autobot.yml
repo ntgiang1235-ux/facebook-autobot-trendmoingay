@@ -19,42 +19,33 @@ on:
           - fun
           - video
           - health
+          - metrics
+          - planner
+          - dispatch
 
   schedule:
     # Daily dependency health check: 07:17 Vietnam time (UTC+7)
     - cron: "17 0 * * *"
 
-    # News posts: 08:30, 11:30, 14:30, 18:30 Vietnam time (UTC+7)
-    - cron: "30 1 * * *"
-    - cron: "30 4 * * *"
-    - cron: "30 7 * * *"
-    - cron: "30 11 * * *"
+    # Build today's adaptive content plan after health, before the first slot.
+    - cron: "47 0 * * *"
 
-    # Reply to comments: 08:15, 14:15, 20:15 Vietnam time
+    # Adaptive dispatcher. GitHub only wakes the bot; Turso daily_plan decides
+    # whether a content slot is actually due. :07/:37 avoids top-of-hour load.
+    - cron: "7,37 * * * *"
+
+    # Reply to comments: 08:15, 14:15, 20:15 Vietnam time.
     - cron: "15 1 * * *"
     - cron: "15 7 * * *"
     - cron: "15 13 * * *"
 
-    # Philosophy: 09:07 Vietnam time
-    - cron: "7 2 * * *"
+    # Metrics collector: four snapshots/check windows per day.
+    - cron: "17 3 * * *"
+    - cron: "17 9 * * *"
+    - cron: "17 15 * * *"
+    - cron: "17 21 * * *"
 
-    # Finance: 11:07 Vietnam time
-    - cron: "7 4 * * *"
-
-    # Fun/entertainment: 13:30 and 20:07 Vietnam time
-    - cron: "30 6 * * *"
-    - cron: "7 13 * * *"
-
-    # Recipe: 16:07 Vietnam time
-    - cron: "7 9 * * *"
-
-    # Video: 09:30, 12:45, 17:30, 21:07 Vietnam time
-    - cron: "30 2 * * *"
-    - cron: "45 5 * * *"
-    - cron: "30 10 * * *"
-    - cron: "7 14 * * *"
-
-    # Daily summary: 21:30 Vietnam time
+    # Daily summary: 21:30 Vietnam time.
     - cron: "30 14 * * *"
 
 permissions:
@@ -107,13 +98,15 @@ jobs:
           else
             case "${{ github.event.schedule }}" in
               "17 0 * * *") ACTION="health" ;;
-              "30 1 * * *"|"30 4 * * *"|"30 7 * * *"|"30 11 * * *") ACTION="post" ;;
-              "15 1 * * *"|"15 7 * * *"|"15 13 * * *") ACTION="reply" ;;
-              "7 2 * * *") ACTION="philosophy" ;;
-              "7 4 * * *") ACTION="finance" ;;
-              "30 6 * * *"|"7 13 * * *") ACTION="fun" ;;
-              "7 9 * * *") ACTION="recipe" ;;
-              "30 2 * * *"|"45 5 * * *"|"30 10 * * *"|"7 14 * * *") ACTION="video" ;;
+              "47 0 * * *") ACTION="planner" ;;
+              "7,37 * * * *") ACTION="dispatch" ;;
+              "15 1 * * *") ACTION="reply" ;;
+              "15 7 * * *") ACTION="reply" ;;
+              "15 13 * * *") ACTION="reply" ;;
+              "17 3 * * *") ACTION="metrics" ;;
+              "17 9 * * *") ACTION="metrics" ;;
+              "17 15 * * *") ACTION="metrics" ;;
+              "17 21 * * *") ACTION="metrics" ;;
               "30 14 * * *") ACTION="summary" ;;
               *)
                 echo "Unknown schedule: ${{ github.event.schedule }}"
