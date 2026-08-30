@@ -22,6 +22,8 @@ on:
           - metrics
           - planner
           - dispatch
+          - report_daily
+          - report_weekly
 
   schedule:
     # Daily dependency health check: 07:17 Vietnam time (UTC+7)
@@ -47,6 +49,12 @@ on:
 
     # Daily summary: 21:30 Vietnam time.
     - cron: "30 14 * * *"
+
+    # Compact Telegram performance brief: 21:47 Vietnam time.
+    - cron: "47 14 * * *"
+
+    # Deeper Telegram strategy report: Sunday 21:57 Vietnam time.
+    - cron: "57 14 * * 0"
 
 permissions:
   contents: read
@@ -108,6 +116,8 @@ jobs:
               "17 15 * * *") ACTION="metrics" ;;
               "17 21 * * *") ACTION="metrics" ;;
               "30 14 * * *") ACTION="summary" ;;
+              "47 14 * * *") ACTION="report_daily" ;;
+              "57 14 * * 0") ACTION="report_weekly" ;;
               *)
                 echo "Unknown schedule: ${{ github.event.schedule }}"
                 exit 1
