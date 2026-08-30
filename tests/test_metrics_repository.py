@@ -1,3 +1,4 @@
+import sqlite3
 import unittest
 
 
@@ -110,6 +111,49 @@ class MetricsRepositoryTests(unittest.TestCase):
         self.assertIn("24", query)
         self.assertIn("72", query)
         self.assertEqual(params, ("2026-08-30T12:00:00+00:00",))
+
+    def test_due_posts_real_sql_excludes_23h_and_is_idempotent(self):
+        from app.metrics_repository import due_posts
+
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        conn.executescript(
+            """
+            CREATE TABLE content_posts (
+                id INTEGER PRIMARY KEY,
+                facebook_post_id TEXT,
+                published_at TEXT,
+                status TEXT
+            );
+            CREATE TABLE content_metrics (
+                facebook_post_id TEXT,
+                score_kind TEXT
+            );
+            """
+        )
+        conn.executemany(
+            "INSERT INTO content_posts VALUES (?, ?, ?, 'published')",
+            [
+                (1, "not-due", "2026-08-29T13:00:00+00:00"),
+                (2, "early-due", "2026-08-29T11:00:00+00:00"),
+                (3, "final-due", "2026-08-27T11:00:00+00:00"),
+                (4, "early-done", "2026-08-29T10:00:00+00:00"),
+            ],
+        )
+        conn.execute("INSERT INTO content_metrics VALUES ('early-done', 'early')")
+        conn.commit()
+
+        def execute(query, params=()):
+            return conn.execute(query, params).fetchall()
+
+        rows = due_posts(execute, "2026-08-30T12:00:00+00:00")
+
+        self.assertEqual(
+            [(row.facebook_post_id, row.score_kind) for row in rows],
+            [("final-due", "final"), ("early-due", "early")],
+        )
+        self.assertNotIn("not-due", [row.facebook_post_id for row in rows])
+        self.assertNotIn("early-done", [row.facebook_post_id for row in rows])
 
     def test_recent_final_scores_returns_numeric_scores_only(self):
         from app.metrics_repository import recent_final_scores
