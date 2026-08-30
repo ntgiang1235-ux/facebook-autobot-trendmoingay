@@ -20,6 +20,7 @@ on:
           - video
           - health
           - metrics
+          - learn
           - planner
           - dispatch
           - report_daily
@@ -29,7 +30,10 @@ on:
     # Daily dependency health check: 07:17 Vietnam time (UTC+7)
     - cron: "17 0 * * *"
 
-    # Build today's adaptive content plan after health, before the first slot.
+    # Refresh adaptive learning from mature metrics before planning the day.
+    - cron: "27 0 * * *"
+
+    # Build today's adaptive content plan after health/learning, before first slot.
     - cron: "47 0 * * *"
 
     # Adaptive dispatcher. GitHub only wakes the bot; Turso daily_plan decides
@@ -106,6 +110,7 @@ jobs:
           else
             case "${{ github.event.schedule }}" in
               "17 0 * * *") ACTION="health" ;;
+              "27 0 * * *") ACTION="learn" ;;
               "47 0 * * *") ACTION="planner" ;;
               "7,37 * * * *") ACTION="dispatch" ;;
               "15 1 * * *") ACTION="reply" ;;

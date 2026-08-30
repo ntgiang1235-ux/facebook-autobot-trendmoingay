@@ -11,6 +11,7 @@ from app import (
     adaptive_jobs,
     db,
     dispatcher,
+    feedback_loop,
     health,
     notifications,
     publication_ledger,
@@ -33,6 +34,7 @@ VALID_ACTIONS = {
     "video",
     "health",
     "metrics",
+    "learn",
     "planner",
     "dispatch",
     "report_daily",
@@ -175,6 +177,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
         db.execute,
     )
     jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
+    jobs["learn"] = lambda: feedback_loop.refresh_strategy(db.execute)
     jobs["report_daily"] = lambda: reporting.send_daily_report(
         db.execute,
         notifications.send_message,
@@ -270,7 +273,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|planner|dispatch|report_daily|report_weekly>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|planner|dispatch|report_daily|report_weekly>"
         )
     run_action(sys.argv[1])
 
