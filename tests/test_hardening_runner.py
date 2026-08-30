@@ -106,7 +106,8 @@ class HardeningRunnerTests(unittest.TestCase):
             set(jobs),
             {
                 "post", "reply", "finance", "philosophy", "summary", "veo",
-                "recipe", "fun", "video", "health", "metrics", "planner", "dispatch"
+                "recipe", "fun", "video", "health", "metrics", "planner", "dispatch",
+                "report_daily", "report_weekly"
             },
         )
 
@@ -124,6 +125,19 @@ class HardeningRunnerTests(unittest.TestCase):
 
         collect.assert_called_once_with()
         self.assertEqual(result, {"due": 0, "processed": 0, "failed": 0})
+
+    def test_reporting_jobs_route_shared_db_and_telegram(self):
+        with patch.object(
+            hardening_runner.reporting, "send_daily_report", return_value=success("daily")
+        ) as daily, patch.object(
+            hardening_runner.reporting, "send_weekly_report", return_value=success("weekly")
+        ) as weekly:
+            jobs = hardening_runner.resolve_jobs()
+            self.assertEqual(jobs["report_daily"]().status, "success")
+            self.assertEqual(jobs["report_weekly"]().status, "success")
+
+        daily.assert_called_once_with(hardening_runner.db.execute, hardening_runner.notifications.send_message)
+        weekly.assert_called_once_with(hardening_runner.db.execute, hardening_runner.notifications.send_message)
 
     def test_resolve_jobs_routes_planner_and_dispatcher_without_operational_jobs(self):
         with patch.object(
