@@ -72,6 +72,17 @@ class AdaptiveFeedbackLoopTests(unittest.TestCase):
                 reason TEXT NOT NULL,
                 is_last_good INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE style_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dimension TEXT NOT NULL,
+                value TEXT NOT NULL,
+                parent_value TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                promoted_at TEXT,
+                retired_at TEXT,
+                UNIQUE(dimension, value)
+            );
             """
         )
         self.conn.execute(
