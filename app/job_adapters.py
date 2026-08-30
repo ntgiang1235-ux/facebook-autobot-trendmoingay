@@ -17,14 +17,17 @@ def adapt_publish_job(
     primary_predicate: Callable[[str], bool],
     *,
     allow_skip: bool = False,
-    on_published: Callable[[str, dict], None] | None = None,
+    on_published: Callable[[str, dict, dict], None] | None = None,
 ) -> Callable[[], JobOutcome]:
     """Turn a legacy publish job's print-and-return behavior into an explicit outcome.
 
     Only failures of the primary Facebook publish are fatal. Optional follow-up
     operations such as seed comments remain best-effort after the primary post
-    has succeeded. When supplied, ``on_published`` receives metadata for a
-    successful primary publish and its failures remain fatal for ledger consistency.
+    has succeeded. When supplied, ``on_published`` receives the endpoint, a
+    pristine copy of the outbound request data and the successful Facebook
+    response. Capturing request data before the underlying helper runs prevents
+    injected credentials such as ``access_token`` from reaching the ledger.
+    Callback failures remain fatal for ledger consistency.
     """
 
     def adapted() -> JobOutcome:
@@ -37,6 +40,7 @@ def adapt_publish_job(
 
         def tracked_fb(endpoint, data, files=None):
             nonlocal primary_attempted, primary_success, primary_failure
+            request_data = dict(data) if isinstance(data, dict) else {}
             code, payload = original_fb(endpoint, data, files=files)
             if primary_predicate(endpoint):
                 primary_attempted = True
@@ -44,7 +48,7 @@ def adapt_publish_job(
                     primary_success = True
                     primary_failure = None
                     if on_published is not None:
-                        on_published(endpoint, payload)
+                        on_published(endpoint, request_data, payload)
                 else:
                     primary_failure = (endpoint, code, payload)
             return code, payload
