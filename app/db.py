@@ -149,6 +149,64 @@ def ensure_schema() -> None:
         "ON content_metrics(facebook_post_id)"
     )
 
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dimension TEXT NOT NULL,
+            value TEXT NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            weighted_score_14d REAL NOT NULL DEFAULT 50.0,
+            recent_score_7d REAL NOT NULL DEFAULT 50.0,
+            success_rate REAL NOT NULL DEFAULT 0.0,
+            current_weight REAL NOT NULL DEFAULT 1.0,
+            last_used_at TEXT,
+            status TEXT NOT NULL DEFAULT 'insufficient_data',
+            cooldown_until TEXT,
+            retest_after TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(dimension, value)
+        )
+        """
+    )
+    execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_stats_dimension_status "
+        "ON strategy_stats(dimension, status)"
+    )
+
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS adaptive_config (
+            id INTEGER PRIMARY KEY,
+            adaptive_enabled INTEGER NOT NULL DEFAULT 1,
+            auto_schedule_enabled INTEGER NOT NULL DEFAULT 1,
+            auto_suspend_enabled INTEGER NOT NULL DEFAULT 1,
+            exploration_rate REAL NOT NULL DEFAULT 0.20,
+            baseline_daily_volume INTEGER NOT NULL DEFAULT 12,
+            current_strategy_version INTEGER,
+            last_good_strategy_version INTEGER,
+            CHECK(id = 1)
+        )
+        """
+    )
+
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_versions (
+            version_id INTEGER PRIMARY KEY,
+            weights_json TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            is_last_good INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    execute(
+        "CREATE INDEX IF NOT EXISTS idx_strategy_versions_created_at "
+        "ON strategy_versions(created_at)"
+    )
+
 
 def record_job(
     run_key: str,

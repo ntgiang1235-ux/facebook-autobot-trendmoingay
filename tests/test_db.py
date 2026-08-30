@@ -167,6 +167,60 @@ class DatabaseTests(unittest.TestCase):
         self.assertTrue(any("idx_content_metrics_score_kind" in query for query in queries))
         self.assertFalse(any("DROP TABLE" in query.upper() for query in queries))
 
+    def test_ensure_schema_creates_adaptive_strategy_tables_additively_and_idempotently(self):
+        calls = []
+
+        def fake_execute(query, params=()):
+            calls.append((query, params))
+            if "PRAGMA table_info(job_runs)" in query:
+                return [
+                    (0, "run_key", "TEXT", 0, None, 1),
+                    (1, "action", "TEXT", 1, None, 0),
+                    (2, "status", "TEXT", 1, None, 0),
+                    (3, "scheduled_for", "TEXT", 0, None, 0),
+                    (4, "delay_minutes", "INTEGER", 0, None, 0),
+                ]
+            return []
+
+        with patch.object(db, "execute", side_effect=fake_execute):
+            db.ensure_schema()
+            db.ensure_schema()
+
+        queries = [query for query, _ in calls]
+        stats_schema = "\n".join(
+            query for query in queries if "CREATE TABLE IF NOT EXISTS strategy_stats" in query
+        )
+        config_schema = "\n".join(
+            query for query in queries if "CREATE TABLE IF NOT EXISTS adaptive_config" in query
+        )
+        versions_schema = "\n".join(
+            query for query in queries if "CREATE TABLE IF NOT EXISTS strategy_versions" in query
+        )
+
+        self.assertTrue(stats_schema)
+        for field in (
+            "dimension", "value", "sample_count", "weighted_score_14d", "recent_score_7d",
+            "success_rate", "current_weight", "last_used_at", "status", "cooldown_until",
+            "retest_after", "updated_at",
+        ):
+            self.assertIn(field, stats_schema)
+        self.assertIn("UNIQUE(dimension, value)", stats_schema)
+
+        self.assertTrue(config_schema)
+        for field in (
+            "adaptive_enabled", "auto_schedule_enabled", "auto_suspend_enabled",
+            "exploration_rate", "baseline_daily_volume", "current_strategy_version",
+            "last_good_strategy_version",
+        ):
+            self.assertIn(field, config_schema)
+
+        self.assertTrue(versions_schema)
+        for field in (
+            "version_id", "weights_json", "config_json", "created_at", "reason", "is_last_good",
+        ):
+            self.assertIn(field, versions_schema)
+        self.assertFalse(any("DROP TABLE" in query.upper() for query in queries))
+
     def test_record_job_upserts_run_status_with_schedule_metadata(self):
         with patch.object(db, "execute", return_value=[]) as execute:
             db.record_job(
