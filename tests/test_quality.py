@@ -135,6 +135,22 @@ class GeminiQualityTests(unittest.TestCase):
         self.assertEqual(decision.action, "rewrite")
         self.assertEqual(decision.reasons, ("quality_assessment_unavailable",))
 
+    def test_non_finite_assessment_is_conservative_rewrite(self):
+        from app.quality import assess_draft
+
+        raw = (
+            '{"novelty": Infinity, "hook": 100, "usefulness": 100, '
+            '"readability": 100, "tone": 100, "cta": 100, '
+            '"semantic_duplicate": false, "hook_too_similar": false, '
+            '"excessive_clickbait": false, "repetitive_cta": false, '
+            '"format_length_violation": false, "reason": "invalid numeric"}'
+        )
+        decision = assess_draft(self.make_candidate(), [], lambda prompt: raw)
+
+        self.assertEqual(decision.score, 65.0)
+        self.assertEqual(decision.action, "rewrite")
+        self.assertEqual(decision.reasons, ("quality_assessment_unavailable",))
+
     def test_assessment_api_error_is_conservative_rewrite(self):
         from app.quality import assess_draft
 
