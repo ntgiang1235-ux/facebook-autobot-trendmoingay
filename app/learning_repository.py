@@ -19,6 +19,7 @@ class LearningObservation:
     score: float
     score_kind: str
     published_at: datetime
+    style_experiment_key: str | None = None
 
 
 def _as_utc(value: datetime | None) -> datetime:
@@ -49,7 +50,8 @@ def load_learning_observations(execute_fn, *, now: datetime | None = None) -> li
         """
         SELECT cp.facebook_post_id, cp.category, cp.scheduled_for,
                cp.hook_type, cp.style_type, cp.cta_type, cp.format_type,
-               cm.content_score, cm.score_kind, cp.published_at
+               cm.content_score, cm.score_kind, cp.published_at,
+               cp.style_experiment_key
         FROM content_posts cp
         JOIN content_metrics cm
           ON cm.facebook_post_id = cp.facebook_post_id
@@ -80,6 +82,7 @@ def load_learning_observations(execute_fn, *, now: datetime | None = None) -> li
                 score=float(row[7]),
                 score_kind=str(row[8]),
                 published_at=_parse_utc(str(row[9])),
+                style_experiment_key=(str(row[10]) if row[10] is not None else None),
             )
         )
     return observations
