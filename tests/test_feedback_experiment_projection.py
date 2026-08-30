@@ -197,6 +197,15 @@ class FeedbackExperimentProjectionTests(unittest.TestCase):
         )
         self.assertEqual(custom, [])
 
+    def test_style_registry_read_failure_is_not_hidden(self):
+        from app.feedback_loop import _style_registry_statuses
+
+        def fail_registry(_query, _params=()):
+            raise RuntimeError("style registry database unavailable")
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            _style_registry_statuses(fail_registry)
+
 
 if __name__ == "__main__":
     unittest.main()
