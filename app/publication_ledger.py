@@ -39,9 +39,9 @@ def record_published_content(
     Only explicit publication metadata is stored. When a validated pre-publish
     decision is supplied, its final candidate and quality/duplicate scores are
     preserved so later learning observes the exact content that Facebook saw.
-    Legacy jobs without intelligence metadata retain the model defaults rather
-    than inventing hook/style/CTA values. Publishes outside dispatcher context
-    are marked ``manual`` so adaptive learning can exclude them.
+    Observed hook/style/CTA labels remain separate from requested experiment
+    attribution. Publishes outside dispatcher context are marked ``manual`` so
+    adaptive learning can exclude them.
     """
     post_id = response.get("post_id") or response.get("id")
     if not post_id:
@@ -87,6 +87,7 @@ def record_published_content(
             style_type=gate_candidate.style_type,
             cta_type=gate_candidate.cta_type,
             format_type=gate_candidate.format_type,
+            style_experiment_key=gate_candidate.style_experiment_key,
         )
     else:
         candidate = ContentCandidate(
