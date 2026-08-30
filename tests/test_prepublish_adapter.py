@@ -8,6 +8,7 @@ class RecordingModule:
     def __init__(self):
         self.fb_calls = []
         self.delivery_calls = []
+        self.saved_posts = []
 
     def call_fb_api(self, endpoint, data, files=None):
         self.fb_calls.append((endpoint, dict(data), files))
@@ -19,6 +20,9 @@ class RecordingModule:
     def send_tele(self, message):
         self.delivery_calls.append(message)
         return True
+
+    def save_posted(self, link, title):
+        self.saved_posts.append((link, title))
 
 
 class PrePublishAdapterTests(unittest.TestCase):
@@ -81,6 +85,38 @@ class PrePublishAdapterTests(unittest.TestCase):
         self.assertIn("same recent topic", outcome.detail)
         self.assertEqual(module.fb_calls, [])
         self.assertEqual(module.delivery_calls, [])
+
+    def test_rejected_decision_does_not_mutate_legacy_posted_history(self):
+        module = RecordingModule()
+
+        def legacy_job():
+            code, _ = module.call_fb_api(
+                "me/feed",
+                {"message": "low quality", "link": "https://example.com/new"},
+            )
+            if code == 200:
+                module.save_posted("https://example.com/new", "New story")
+
+        decision = PrePublishDecision(
+            publish=False,
+            status="skipped_low_quality",
+            request_data=None,
+            quality_score=55.0,
+            duplicate_score=0.1,
+            rewrite_count=2,
+            detail="quality below threshold",
+        )
+        outcome = adapt_publish_job(
+            legacy_job,
+            module,
+            lambda endpoint: endpoint == "me/feed",
+            allow_skip=True,
+            before_publish=lambda endpoint, request: decision,
+        )()
+
+        self.assertEqual(outcome.status, "skipped")
+        self.assertEqual(module.fb_calls, [])
+        self.assertEqual(module.saved_posts, [])
 
     def test_prepublish_exception_fails_closed_without_real_facebook_call(self):
         module = RecordingModule()
