@@ -7,7 +7,16 @@ import autobot
 import autobotvideo
 import metrics_runner
 import runner
-from app import adaptive_jobs, db, dispatcher, health, notifications, reporting, scheduler
+from app import (
+    adaptive_jobs,
+    db,
+    dispatcher,
+    health,
+    notifications,
+    publication_ledger,
+    reporting,
+    scheduler,
+)
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
 from app.job_contract import JobOutcome, run_job, skipped
@@ -73,6 +82,27 @@ def _runner_primary_publish(endpoint: str) -> bool:
     return endpoint in {"me/feed", "me/photos"}
 
 
+def _adaptive_publish_callback(action: str):
+    def callback(endpoint: str, request_data: dict, response: dict) -> None:
+        publication_ledger.record_published_content(
+            db.execute,
+            action=action,
+            endpoint=endpoint,
+            request_data=request_data,
+            response=response,
+        )
+
+    return callback
+
+
+def _video_publish_callback(**metadata) -> None:
+    publication_ledger.record_published_content(
+        db.execute,
+        action="video",
+        **metadata,
+    )
+
+
 def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], object]]:
     """Resolve jobs through shared DB, verified HTTP and explicit outcome adapters."""
     autobot.execute_db = db.execute
@@ -87,6 +117,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=True,
+            on_published=_adaptive_publish_callback("post"),
         ),
         "reply": adapt_reply_job(autobot.auto_reply_job, autobot),
         "finance": adapt_publish_job(
@@ -94,12 +125,14 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
+            on_published=_adaptive_publish_callback("finance"),
         ),
         "philosophy": adapt_publish_job(
             autobot.philosophy_post_job,
             autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
+            on_published=_adaptive_publish_callback("philosophy"),
         ),
         "summary": adapt_publish_job(
             autobot.daily_summary_job,
@@ -117,12 +150,14 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             _runner_primary_publish,
             allow_skip=False,
+            on_published=_adaptive_publish_callback("recipe"),
         ),
         "fun": adapt_publish_job(
             runner.fun_job,
             autobot,
             _runner_primary_publish,
             allow_skip=False,
+            on_published=_adaptive_publish_callback("fun"),
         ),
     }
 
@@ -130,7 +165,10 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
         action: _validated_text_job(action, job_fn)
         for action, job_fn in text_jobs.items()
     }
-    jobs["video"] = lambda: autobotvideo.video_post_job(dry_run=False)
+    jobs["video"] = lambda: autobotvideo.video_post_job(
+        dry_run=False,
+        on_published=_video_publish_callback,
+    )
     jobs["health"] = lambda: health.run_health_check(
         autobot.http,
         autobot.call_gemini,
