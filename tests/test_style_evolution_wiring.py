@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import hardening_runner
 from app.style_evolution import EvolutionResult
+from app.style_experiment_lifecycle import LifecycleResult
 
 
 WORKFLOW = Path(".github/workflows/facebook-autobot.yml")
@@ -11,6 +12,7 @@ WORKFLOW = Path(".github/workflows/facebook-autobot.yml")
 
 class StyleEvolutionWiringTests(unittest.TestCase):
     def test_hardening_runner_exposes_style_evolve_action_and_routes_shared_dependencies(self):
+        lifecycle = LifecycleResult(status="no_pending", detail="no pending style experiment")
         result = EvolutionResult(
             status="created",
             dimension="tone",
@@ -20,6 +22,9 @@ class StyleEvolutionWiringTests(unittest.TestCase):
             detail="controlled style experiment created",
         )
         with patch(
+            "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+            return_value=lifecycle,
+        ) as review, patch(
             "hardening_runner.style_evolution.generate_next_experiment",
             return_value=result,
         ) as evolve:
@@ -29,16 +34,113 @@ class StyleEvolutionWiringTests(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.detail, "controlled style experiment created")
+        review.assert_called_once_with(hardening_runner.db.execute)
         evolve.assert_called_once_with(
             hardening_runner.db.execute,
             hardening_runner.autobot.call_gemini,
         )
 
+    def test_pending_inconclusive_lifecycle_blocks_replacement_generation(self):
+        for status in (
+            "insufficient_experiment_data",
+            "insufficient_parent_data",
+            "kept_explore",
+        ):
+            with self.subTest(status=status):
+                lifecycle = LifecycleResult(
+                    status=status,
+                    value="witty_short_punchline",
+                    detail=f"{status}: keep current experiment",
+                )
+                with patch(
+                    "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+                    return_value=lifecycle,
+                ), patch(
+                    "hardening_runner.style_evolution.generate_next_experiment"
+                ) as evolve:
+                    outcome = hardening_runner.resolve_jobs()["style_evolve"]()
+
+                self.assertEqual(outcome.status, "skipped")
+                self.assertEqual(outcome.detail, f"{status}: keep current experiment")
+                evolve.assert_not_called()
+
+    def test_decisive_lifecycle_transition_can_create_one_replacement(self):
+        for lifecycle_status in ("promoted", "retired"):
+            with self.subTest(lifecycle_status=lifecycle_status):
+                lifecycle = LifecycleResult(
+                    status=lifecycle_status,
+                    value="witty_short_punchline",
+                    detail=f"experiment {lifecycle_status}",
+                )
+                generated = EvolutionResult(
+                    status="created",
+                    dimension="hook",
+                    value="question_with_tension",
+                    parent_value="question",
+                    style_id=43,
+                    detail="controlled style experiment created",
+                )
+                with patch(
+                    "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+                    return_value=lifecycle,
+                ), patch(
+                    "hardening_runner.style_evolution.generate_next_experiment",
+                    return_value=generated,
+                ) as evolve:
+                    outcome = hardening_runner.resolve_jobs()["style_evolve"]()
+
+                self.assertEqual(outcome.status, "success")
+                self.assertIn(lifecycle_status, outcome.detail)
+                self.assertIn("controlled style experiment created", outcome.detail)
+                evolve.assert_called_once_with(
+                    hardening_runner.db.execute,
+                    hardening_runner.autobot.call_gemini,
+                )
+
+    def test_decisive_lifecycle_transition_is_success_even_without_replacement(self):
+        lifecycle = LifecycleResult(
+            status="promoted",
+            value="witty_short_punchline",
+            detail="experiment promoted",
+        )
+        generated = EvolutionResult(
+            status="insufficient_data",
+            detail="no mature parent available for next experiment",
+        )
+        with patch(
+            "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+            return_value=lifecycle,
+        ), patch(
+            "hardening_runner.style_evolution.generate_next_experiment",
+            return_value=generated,
+        ):
+            outcome = hardening_runner.resolve_jobs()["style_evolve"]()
+
+        self.assertEqual(outcome.status, "success")
+        self.assertIn("promoted", outcome.detail)
+        self.assertIn("no mature parent", outcome.detail)
+
+    def test_lifecycle_failure_propagates_without_generation(self):
+        with patch(
+            "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+            side_effect=RuntimeError("lifecycle database unavailable"),
+        ), patch(
+            "hardening_runner.style_evolution.generate_next_experiment"
+        ) as evolve:
+            with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                hardening_runner.resolve_jobs()["style_evolve"]()
+
+        evolve.assert_not_called()
+
     def test_hardened_style_evolution_fails_on_dependency_or_registry_failure(self):
+        lifecycle = LifecycleResult(status="no_pending", detail="no pending style experiment")
         for status in ("generation_unavailable", "registry_write_failed"):
             with self.subTest(status=status):
                 result = EvolutionResult(status=status, detail=f"{status}: unavailable")
                 with patch(
+                    "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+                    return_value=lifecycle,
+                ), patch(
                     "hardening_runner.style_evolution.generate_next_experiment",
                     return_value=result,
                 ):
@@ -47,6 +149,7 @@ class StyleEvolutionWiringTests(unittest.TestCase):
                         jobs["style_evolve"]()
 
     def test_hardened_style_evolution_records_normal_noop_as_skipped(self):
+        lifecycle = LifecycleResult(status="no_pending", detail="no pending style experiment")
         for status in (
             "pending_existing",
             "insufficient_data",
@@ -56,6 +159,9 @@ class StyleEvolutionWiringTests(unittest.TestCase):
             with self.subTest(status=status):
                 result = EvolutionResult(status=status, detail=f"{status}: no new experiment")
                 with patch(
+                    "hardening_runner.style_experiment_lifecycle.review_pending_experiment",
+                    return_value=lifecycle,
+                ), patch(
                     "hardening_runner.style_evolution.generate_next_experiment",
                     return_value=result,
                 ):
