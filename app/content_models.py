@@ -13,6 +13,7 @@ class ContentCandidate:
     style_type: str = "unknown"
     cta_type: str = "none"
     format_type: str = "text"
+    style_experiment_key: str | None = None
 
 
 @dataclass(frozen=True)
