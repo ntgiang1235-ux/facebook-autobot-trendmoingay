@@ -20,6 +20,9 @@ from app import (
     publication_ledger,
     reporting,
     scheduler,
+    style_context,
+    style_prompt_adapter,
+    style_strategy,
 )
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
@@ -87,7 +90,7 @@ def _runner_primary_publish(endpoint: str) -> bool:
     return endpoint in {"me/feed", "me/photos"}
 
 
-def _adaptive_before_publish(action: str):
+def _adaptive_before_publish(action: str, decision_state: dict | None = None):
     """Build a bounded pre-publish guard for one adaptive content category."""
 
     def guard(endpoint: str, request_data: dict):
@@ -99,29 +102,71 @@ def _adaptive_before_publish(action: str):
             since,
             30,
         )
-        return prepublish_guard.evaluate_request(
+        decision = prepublish_guard.evaluate_request(
             action=action,
             endpoint=endpoint,
             request_data=request_data,
             recent=recent,
             gemini_fn=lambda prompt: autobot.call_gemini(prompt),
             now=current,
+            style_bundle=style_context.current_style_bundle(),
         )
+        if decision_state is not None:
+            decision_state["decision"] = decision
+        return decision
 
     return guard
 
 
-def _adaptive_publish_callback(action: str):
+def _adaptive_publish_callback(action: str, decision_state: dict | None = None):
     def callback(endpoint: str, request_data: dict, response: dict) -> None:
+        decision = (
+            decision_state.pop("decision", None)
+            if decision_state is not None
+            else None
+        )
         publication_ledger.record_published_content(
             db.execute,
             action=action,
             endpoint=endpoint,
             request_data=request_data,
             response=response,
+            candidate=(decision.candidate if decision is not None else None),
+            quality_score=(decision.quality_score if decision is not None else None),
+            duplicate_score=(decision.duplicate_score if decision is not None else None),
         )
 
     return callback
+
+
+def _adaptive_publish_job(
+    action: str,
+    job_fn: Callable[[], object],
+    primary_predicate: Callable[[str], bool],
+    *,
+    allow_skip: bool,
+) -> Callable[[], object]:
+    """Compose style selection, pre-publish intelligence and publication ledger."""
+    decision_state: dict = {}
+    adapted = adapt_publish_job(
+        job_fn,
+        autobot,
+        primary_predicate,
+        allow_skip=allow_skip,
+        on_published=_adaptive_publish_callback(action, decision_state),
+        before_publish=_adaptive_before_publish(action, decision_state),
+    )
+
+    def styled():
+        bundle = style_strategy.choose_style_bundle(db.execute)
+        return style_prompt_adapter.run_with_style(
+            action,
+            autobot,
+            adapted,
+            bundle,
+        )
+
+    return styled
 
 
 def _video_publish_callback(**metadata) -> None:
@@ -141,30 +186,24 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
     autobot.send_tele = notifications.send_message
 
     text_jobs = {
-        "post": adapt_publish_job(
+        "post": _adaptive_publish_job(
+            "post",
             autobot.single_post_job,
-            autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=True,
-            on_published=_adaptive_publish_callback("post"),
-            before_publish=_adaptive_before_publish("post"),
         ),
         "reply": adapt_reply_job(autobot.auto_reply_job, autobot),
-        "finance": adapt_publish_job(
+        "finance": _adaptive_publish_job(
+            "finance",
             autobot.financial_post_job,
-            autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
-            on_published=_adaptive_publish_callback("finance"),
-            before_publish=_adaptive_before_publish("finance"),
         ),
-        "philosophy": adapt_publish_job(
+        "philosophy": _adaptive_publish_job(
+            "philosophy",
             autobot.philosophy_post_job,
-            autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
-            on_published=_adaptive_publish_callback("philosophy"),
-            before_publish=_adaptive_before_publish("philosophy"),
         ),
         "summary": adapt_publish_job(
             autobot.daily_summary_job,
@@ -177,21 +216,17 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             allow_skip=True,
         ),
-        "recipe": adapt_publish_job(
+        "recipe": _adaptive_publish_job(
+            "recipe",
             runner.recipe_job,
-            autobot,
             _runner_primary_publish,
             allow_skip=False,
-            on_published=_adaptive_publish_callback("recipe"),
-            before_publish=_adaptive_before_publish("recipe"),
         ),
-        "fun": adapt_publish_job(
+        "fun": _adaptive_publish_job(
+            "fun",
             runner.fun_job,
-            autobot,
             _runner_primary_publish,
             allow_skip=False,
-            on_published=_adaptive_publish_callback("fun"),
-            before_publish=_adaptive_before_publish("fun"),
         ),
     }
 
