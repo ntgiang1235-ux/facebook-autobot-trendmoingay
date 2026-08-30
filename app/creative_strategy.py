@@ -176,3 +176,21 @@ def current_creative_prompt_suffix() -> str:
             cta_type=cta_type,
         )
     )
+
+
+def run_with_creative_prompt(job_fn, gemini_module, *, markers: tuple[str, ...]):
+    """Append creative guidance only to the job's primary content-generation prompt."""
+    original = gemini_module.call_gemini
+
+    def targeted(prompt, *args, **kwargs):
+        text = str(prompt)
+        suffix = current_creative_prompt_suffix()
+        if suffix and any(marker in text for marker in markers):
+            text = text + suffix
+        return original(text, *args, **kwargs)
+
+    gemini_module.call_gemini = targeted
+    try:
+        return job_fn()
+    finally:
+        gemini_module.call_gemini = original
