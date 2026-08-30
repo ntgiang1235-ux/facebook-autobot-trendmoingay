@@ -21,6 +21,7 @@ on:
           - health
           - metrics
           - learn
+          - style_evolve
           - planner
           - dispatch
           - report_daily
@@ -32,6 +33,9 @@ on:
 
     # Refresh adaptive learning from mature metrics before planning the day.
     - cron: "27 0 * * *"
+
+    # Evolve at most one controlled style experiment weekly before planning.
+    - cron: "37 0 * * 0"
 
     # Build today's adaptive content plan after health/learning, before first slot.
     - cron: "47 0 * * *"
@@ -111,6 +115,7 @@ jobs:
             case "${{ github.event.schedule }}" in
               "17 0 * * *") ACTION="health" ;;
               "27 0 * * *") ACTION="learn" ;;
+              "37 0 * * 0") ACTION="style_evolve" ;;
               "47 0 * * *") ACTION="planner" ;;
               "7,37 * * * *") ACTION="dispatch" ;;
               "15 1 * * *") ACTION="reply" ;;
