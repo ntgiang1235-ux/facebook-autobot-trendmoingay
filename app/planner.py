@@ -13,6 +13,7 @@ VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 CORE_ACTIONS = ("post", "finance", "philosophy", "fun", "recipe", "video")
 MIN_MATURE_SAMPLES = 5
 MIN_READY_CATEGORIES = 3
+MIN_READY_TIME_BUCKETS = 5
 
 # Stable baseline preserves the existing publishing rhythm while moving schedule
 # ownership from workflow YAML into Turso.
@@ -32,6 +33,10 @@ BASELINE_SLOTS = (
 )
 EXTRA_SLOTS = (("10:30", "post"), ("21:00", "video"))
 REDUCTION_PRIORITY = ("12:30", "11:30")
+SAFE_TIME_BUCKETS = tuple(
+    f"{minutes // 60:02d}:{minutes % 60:02d}"
+    for minutes in range(8 * 60 + 30, 21 * 60 + 1, 30)
+)
 
 
 def _as_utc(value: datetime | None) -> datetime:
@@ -41,8 +46,8 @@ def _as_utc(value: datetime | None) -> datetime:
     return current.astimezone(timezone.utc)
 
 
-def _stable_rng(plan_date: date, version: int | None) -> random.Random:
-    raw = f"{plan_date.isoformat()}:{version if version is not None else 'baseline'}"
+def _stable_rng(plan_date: date, version: int | None, scope: str = "strategy") -> random.Random:
+    raw = f"{plan_date.isoformat()}:{version if version is not None else 'baseline'}:{scope}"
     seed = int(hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16], 16)
     return random.Random(seed)
 
@@ -110,6 +115,18 @@ def _learning_ready(category_stats: list[StrategyStat]) -> bool:
     return len(mature) >= MIN_READY_CATEGORIES
 
 
+def _time_learning_ready(time_stats: list[StrategyStat]) -> bool:
+    mature = [
+        stat
+        for stat in time_stats
+        if stat.dimension == "time_bucket"
+        and stat.value in SAFE_TIME_BUCKETS
+        and stat.sample_count >= MIN_MATURE_SAMPLES
+        and stat.status not in {"retired", "suspended"}
+    ]
+    return len(mature) >= MIN_READY_TIME_BUCKETS
+
+
 def _due_retests(category_stats: list[StrategyStat], now: datetime) -> list[StrategyStat]:
     due = []
     for stat in category_stats:
@@ -122,6 +139,7 @@ def _due_retests(category_stats: list[StrategyStat], now: datetime) -> list[Stra
 
 
 def _active_stats(category_stats: list[StrategyStat], now: datetime) -> list[StrategyStat]:
+    del now
     active = []
     for stat in category_stats:
         if stat.dimension != "category" or stat.value not in CORE_ACTIONS:
@@ -186,6 +204,70 @@ def _adaptive_actions(
     return chosen + reserved
 
 
+def _adaptive_time_buckets(
+    target: int,
+    time_stats: list[StrategyStat],
+    config: AdaptiveConfig,
+    rng: random.Random,
+) -> list[str]:
+    blocked = {
+        stat.value
+        for stat in time_stats
+        if stat.dimension == "time_bucket"
+        and stat.status in {"retired", "suspended"}
+    }
+    safe = [value for value in SAFE_TIME_BUCKETS if value not in blocked]
+    if len(safe) < target:
+        # Fail safe rather than creating duplicate time slots.
+        return [hhmm for hhmm, _ in _baseline_template(target) if hhmm not in blocked][:target]
+
+    stats_by_value = {
+        stat.value: stat
+        for stat in time_stats
+        if stat.dimension == "time_bucket"
+        and stat.value in safe
+        and stat.sample_count >= MIN_MATURE_SAMPLES
+        and stat.status not in {"retired", "suspended"}
+    }
+    exploration_rate = max(0.0, min(1.0, float(config.exploration_rate)))
+    explore_count = min(target, max(0, round(target * exploration_rate)))
+    exploit_count = target - explore_count
+
+    ranked_exploit = sorted(
+        stats_by_value.values(),
+        key=lambda stat: (
+            -max(0.01, float(stat.current_weight)),
+            -float(stat.weighted_score_14d),
+            -float(stat.recent_score_7d),
+            stat.value,
+        ),
+    )
+    selected = [stat.value for stat in ranked_exploit[:exploit_count]]
+
+    # Exploration favors unseen/low-sample safe buckets. Shuffle equal-sample
+    # candidates with a stable RNG so plans evolve without becoming flaky.
+    explore_candidates = [value for value in safe if value not in selected]
+    rng.shuffle(explore_candidates)
+    explore_candidates.sort(
+        key=lambda value: stats_by_value[value].sample_count if value in stats_by_value else 0
+    )
+    for value in explore_candidates:
+        if len(selected) >= target:
+            break
+        selected.append(value)
+
+    # If mature stats were fewer than the exploit quota, fill remaining unique
+    # safe buckets deterministically without violating the day window.
+    if len(selected) < target:
+        for value in safe:
+            if value not in selected:
+                selected.append(value)
+            if len(selected) >= target:
+                break
+
+    return sorted(selected[:target])
+
+
 def build_daily_plan(
     plan_date: date,
     config: AdaptiveConfig,
@@ -195,7 +277,6 @@ def build_daily_plan(
     now: datetime | None = None,
 ) -> list[DailyPlanSlot]:
     """Build one deterministic plan; workflow timing stays generic and immutable."""
-    del time_stats  # Time-bucket learning can be layered in without changing the plan contract.
     created = _as_utc(now)
     adaptive_allowed = (
         config.adaptive_enabled
@@ -212,11 +293,26 @@ def build_daily_plan(
         active = _active_stats(category_stats, created)
         due = _due_retests(category_stats, created)
         target = target_daily_volume(config.baseline_daily_volume, _overall_score(active))
-        action_modes = _adaptive_actions(target, active, due, config, _stable_rng(plan_date, config.current_strategy_version))
-        template = _baseline_template(target)
-        local_times = [hhmm for hhmm, _ in template]
+        action_modes = _adaptive_actions(
+            target,
+            active,
+            due,
+            config,
+            _stable_rng(plan_date, config.current_strategy_version, "category"),
+        )
+        if _time_learning_ready(time_stats):
+            local_times = _adaptive_time_buckets(
+                target,
+                time_stats,
+                config,
+                _stable_rng(plan_date, config.current_strategy_version, "time"),
+            )
+        else:
+            template = _baseline_template(target)
+            local_times = [hhmm for hhmm, _ in template]
 
-    # Pair strategy choices with stable half-hour opportunities, then sort by time.
+    # Pair independently learned content choices with independently learned time
+    # opportunities, then persist in chronological order.
     rows = sorted(zip(local_times, action_modes), key=lambda item: item[0])
     counters: dict[str, int] = {}
     slots: list[DailyPlanSlot] = []
