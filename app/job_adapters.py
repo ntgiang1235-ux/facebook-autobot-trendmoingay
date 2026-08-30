@@ -38,15 +38,17 @@ def adapt_publish_job(
     Facebook upload exception and trigger a duplicate publish.
 
     A pre-publish rejection is represented to legacy code as a synthetic 200 so
-    image helpers do not fall back to a second publish. Follow-up Facebook calls
-    and success Telegram messages are suppressed until the legacy job returns;
-    the adapter then reports an explicit skipped outcome.
+    image helpers do not fall back to a second publish. Once rejected, follow-up
+    Facebook/Gemini calls, success Telegram messages, and legacy ``save_posted``
+    history writes are suppressed until the job returns; the adapter then emits
+    an explicit skipped outcome.
     """
 
     def adapted() -> JobOutcome:
         original_fb = module.call_fb_api
         original_gemini = module.call_gemini
         original_delivery = getattr(module, "send_tele", None)
+        original_save_posted = getattr(module, "save_posted", None)
         primary_attempted = False
         primary_success = False
         primary_failure = None
@@ -107,6 +109,8 @@ def adapt_publish_job(
 
         def tracked_gemini(prompt, timeout=30):
             nonlocal gemini_failed_before_publish
+            if prepublish_rejected is not None:
+                return None
             result = original_gemini(prompt, timeout=timeout)
             if not result and not primary_success:
                 gemini_failed_before_publish = True
@@ -117,10 +121,17 @@ def adapt_publish_job(
                 return True
             return original_delivery(message)
 
+        def tracked_save_posted(link, title):
+            if prepublish_rejected is not None:
+                return None
+            return original_save_posted(link, title)
+
         module.call_fb_api = tracked_fb
         module.call_gemini = tracked_gemini
         if callable(original_delivery):
             module.send_tele = tracked_delivery
+        if callable(original_save_posted):
+            module.save_posted = tracked_save_posted
         try:
             job_fn()
         finally:
@@ -128,6 +139,8 @@ def adapt_publish_job(
             module.call_gemini = original_gemini
             if callable(original_delivery):
                 module.send_tele = original_delivery
+            if callable(original_save_posted):
+                module.save_posted = original_save_posted
 
         if prepublish_rejected is not None:
             return skipped(prepublish_rejected)
