@@ -104,6 +104,21 @@ class StyleSteeringWiringTests(unittest.TestCase):
         select.assert_called_once_with(hardening_runner.db.execute)
         self.assertIs(evaluate.call_args.kwargs["style_target"], target)
 
+    def test_style_strategy_failure_falls_back_to_no_target_but_still_runs_gate(self):
+        with patch(
+            "hardening_runner.style_steering.select_style_target",
+            side_effect=RuntimeError("strategy unavailable"),
+        ), patch(
+            "hardening_runner.content_repository.recent_content", return_value=[]
+        ), patch(
+            "hardening_runner.prepublish_guard.evaluate_request", return_value="decision"
+        ) as evaluate:
+            guard = hardening_runner._adaptive_before_publish("finance")
+            result = guard("me/feed", {"message": "hello"})
+
+        self.assertEqual(result, "decision")
+        self.assertIsNone(evaluate.call_args.kwargs["style_target"])
+
 
 if __name__ == "__main__":
     unittest.main()
