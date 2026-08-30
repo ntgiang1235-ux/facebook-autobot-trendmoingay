@@ -36,24 +36,62 @@ class JobAdapterTests(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
 
-    def test_primary_publish_calls_metadata_callback_once(self):
+    def test_primary_publish_calls_metadata_callback_once_with_request_data(self):
         module = FakeModule()
-        payload = {"id": "123_456"}
-        module.fb_responses = [(200, payload)]
+        response = {"id": "123_456"}
+        module.fb_responses = [(200, response)]
         published = []
 
         def legacy_job():
-            module.call_fb_api("me/feed", {"message": "hello"})
+            module.call_fb_api(
+                "me/feed",
+                {"message": "hello", "link": "https://example.com/story"},
+            )
 
         outcome = adapt_publish_job(
             legacy_job,
             module,
             lambda endpoint: endpoint == "me/feed",
-            on_published=lambda endpoint, response: published.append((endpoint, response)),
+            on_published=lambda endpoint, request, payload: published.append(
+                (endpoint, request, payload)
+            ),
         )()
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(published, [("me/feed", payload)])
+        self.assertEqual(
+            published,
+            [
+                (
+                    "me/feed",
+                    {"message": "hello", "link": "https://example.com/story"},
+                    response,
+                )
+            ],
+        )
+
+    def test_publish_callback_gets_pristine_request_before_api_mutates_secrets(self):
+        module = FakeModule()
+        published = []
+
+        def mutating_fb(endpoint, data, files=None):
+            data["access_token"] = "secret-token"
+            return 200, {"id": "123_456"}
+
+        module.call_fb_api = mutating_fb
+
+        def legacy_job():
+            module.call_fb_api("me/feed", {"message": "safe content"})
+
+        outcome = adapt_publish_job(
+            legacy_job,
+            module,
+            lambda endpoint: endpoint == "me/feed",
+            on_published=lambda endpoint, request, response: published.append(request),
+        )()
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(published, [{"message": "safe content"}])
+        self.assertNotIn("access_token", published[0])
 
     def test_follow_up_comment_does_not_trigger_metadata_callback(self):
         module = FakeModule()
@@ -72,11 +110,13 @@ class JobAdapterTests(unittest.TestCase):
             legacy_job,
             module,
             lambda endpoint: endpoint == "me/feed",
-            on_published=lambda endpoint, response: published.append((endpoint, response)),
+            on_published=lambda endpoint, request, response: published.append(
+                (endpoint, request, response)
+            ),
         )()
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(published, [("me/feed", primary)])
+        self.assertEqual(published, [("me/feed", {"message": "hello"}, primary)])
 
     def test_metadata_callback_failure_is_not_swallowed(self):
         module = FakeModule()
@@ -85,7 +125,7 @@ class JobAdapterTests(unittest.TestCase):
         def legacy_job():
             module.call_fb_api("me/feed", {"message": "hello"})
 
-        def broken_callback(endpoint, payload):
+        def broken_callback(endpoint, request, payload):
             raise RuntimeError("ledger write failed")
 
         job = adapt_publish_job(
