@@ -20,6 +20,30 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(meta.delay_minutes, 304)
         self.assertTrue(meta.stale)
 
+    def test_recurring_dispatcher_cron_uses_latest_minute_in_current_hour(self):
+        now = datetime(2026, 8, 31, 8, 46, tzinfo=timezone.utc)
+        meta = schedule_metadata("7,37 * * * *", now=now, stale_after_minutes=60)
+
+        self.assertEqual(meta.scheduled_for, datetime(2026, 8, 31, 8, 37, tzinfo=timezone.utc))
+        self.assertEqual(meta.delay_minutes, 9)
+        self.assertFalse(meta.stale)
+
+    def test_recurring_dispatcher_cron_rolls_back_to_previous_hour(self):
+        now = datetime(2026, 8, 31, 8, 5, tzinfo=timezone.utc)
+        meta = schedule_metadata("7,37 * * * *", now=now, stale_after_minutes=60)
+
+        self.assertEqual(meta.scheduled_for, datetime(2026, 8, 31, 7, 37, tzinfo=timezone.utc))
+        self.assertEqual(meta.delay_minutes, 28)
+        self.assertFalse(meta.stale)
+
+    def test_recurring_dispatcher_cron_can_be_marked_stale(self):
+        now = datetime(2026, 8, 31, 8, 59, tzinfo=timezone.utc)
+        meta = schedule_metadata("7,37 * * * *", now=now, stale_after_minutes=15)
+
+        self.assertEqual(meta.scheduled_for, datetime(2026, 8, 31, 8, 37, tzinfo=timezone.utc))
+        self.assertEqual(meta.delay_minutes, 22)
+        self.assertTrue(meta.stale)
+
     def test_manual_run_has_no_schedule_metadata(self):
         now = datetime(2026, 8, 29, 14, 11, tzinfo=timezone.utc)
         meta = schedule_metadata("", now=now)
@@ -27,6 +51,11 @@ class SchedulerTests(unittest.TestCase):
         self.assertIsNone(meta.scheduled_for)
         self.assertIsNone(meta.delay_minutes)
         self.assertFalse(meta.stale)
+
+    def test_unsupported_complex_cron_fails_closed(self):
+        now = datetime(2026, 8, 31, 8, 5, tzinfo=timezone.utc)
+        with self.assertRaisesRegex(ValueError, "không hỗ trợ"):
+            schedule_metadata("*/10 8-20 * * 1-5", now=now)
 
 
 if __name__ == "__main__":
