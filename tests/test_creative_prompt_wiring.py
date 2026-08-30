@@ -6,16 +6,22 @@ from app.publication_context import PublicationContext, use_publication_context
 
 
 class CreativePromptWrapperTests(unittest.TestCase):
-    def _context(self):
+    def _context(
+        self,
+        *,
+        hook_type="contrast",
+        style_type="explanatory",
+        cta_type="opinion_question",
+    ):
         return PublicationContext(
             run_key="run-1",
             category="post",
             scheduled_for="2026-08-31T01:30:00+00:00",
             strategy_mode="exploit",
             strategy_version=12,
-            hook_type="contrast",
-            style_type="explanatory",
-            cta_type="opinion_question",
+            hook_type=hook_type,
+            style_type=style_type,
+            cta_type=cta_type,
         )
 
     def test_wrapper_augments_only_matching_primary_prompt_and_restores_gemini(self):
@@ -49,6 +55,70 @@ class CreativePromptWrapperTests(unittest.TestCase):
         self.assertIn("không bịa", seen[1][0].lower())
         self.assertEqual(seen[1][1], 11)
         self.assertIs(module.call_gemini, original)
+
+    def test_post_legacy_question_requirement_is_removed_when_no_cta_is_selected(self):
+        from app.creative_strategy import run_with_creative_prompt
+
+        seen = []
+        module = SimpleNamespace(call_gemini=lambda prompt: seen.append(prompt) or "ok")
+        legacy = (
+            "Viết status FB cho tin: dữ kiện\n"
+            "Tóm tắt sắc sảo, hóm hỉnh, <250 chữ. Kết bài bằng 1 câu hỏi.\n"
+            "CHỈ trả về status."
+        )
+
+        with use_publication_context(self._context(cta_type="no_cta")):
+            run_with_creative_prompt(
+                lambda: module.call_gemini(legacy),
+                module,
+                markers=("Viết status FB cho tin:",),
+            )
+
+        self.assertNotIn("Kết bài bằng 1 câu hỏi.", seen[0])
+        self.assertIn("Không thêm lời kêu gọi", seen[0])
+
+    def test_finance_legacy_question_requirement_is_removed_before_adaptive_cta(self):
+        from app.creative_strategy import run_with_creative_prompt
+
+        seen = []
+        module = SimpleNamespace(call_gemini=lambda prompt: seen.append(prompt) or "ok")
+        legacy = (
+            "Viết 1 status FB ngắn gọn cập nhật tỷ giá ngoại tệ.\n"
+            "Giọng điệu chuyên nghiệp, nhận định nhanh gọn. "
+            "Kết thúc bằng câu hỏi mở về diễn biến thị trường và hashtag #TRENDMOINGAY #TyGia."
+        )
+
+        with use_publication_context(self._context(cta_type="save_for_later")):
+            run_with_creative_prompt(
+                lambda: module.call_gemini(legacy),
+                module,
+                markers=("cập nhật tỷ giá ngoại tệ",),
+            )
+
+        self.assertNotIn("Kết thúc bằng câu hỏi mở", seen[0])
+        self.assertIn("#TRENDMOINGAY #TyGia", seen[0])
+        self.assertIn("lưu lại", seen[0])
+
+    def test_fun_legacy_forced_tone_is_removed_before_adaptive_style(self):
+        from app.creative_strategy import run_with_creative_prompt
+
+        seen = []
+        module = SimpleNamespace(call_gemini=lambda prompt: seen.append(prompt) or "ok")
+        legacy = (
+            "Hãy viết 1 status tấu hài dưới 40 chữ.\n"
+            "Văn phong bắt buộc: xéo xắt, châm biếm sâu cay.\n"
+            "Kèm #TRENDMOINGAY #GiaiTri."
+        )
+
+        with use_publication_context(self._context(style_type="reflective")):
+            run_with_creative_prompt(
+                lambda: module.call_gemini(legacy),
+                module,
+                markers=("status tấu hài",),
+            )
+
+        self.assertNotIn("Văn phong bắt buộc:", seen[0])
+        self.assertIn("suy ngẫm", seen[0].lower())
 
     def test_wrapper_without_publication_context_leaves_prompt_unchanged(self):
         from app.creative_strategy import run_with_creative_prompt
