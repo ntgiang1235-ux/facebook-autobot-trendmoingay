@@ -9,12 +9,13 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _has_experiment_column(execute_fn) -> bool:
-    try:
-        rows = execute_fn("PRAGMA table_info(content_posts)", ())
-    except Exception:
-        return False
-    return any(len(row) > 1 and str(row[1]) == "style_experiment_key" for row in rows)
+def _missing_experiment_column(error: Exception) -> bool:
+    text = str(error).lower()
+    return "style_experiment_key" in text and (
+        "has no column" in text
+        or "no such column" in text
+        or "missing column" in text
+    )
 
 
 def record_candidate(
@@ -54,12 +55,7 @@ def record_candidate(
         created_at,
     )
 
-    has_experiment_column = _has_experiment_column(execute_fn)
-    if candidate.style_experiment_key is not None and not has_experiment_column:
-        raise RuntimeError("content_posts schema missing style_experiment_key")
-
-    if has_experiment_column:
-        query = """
+    experiment_query = """
         INSERT INTO content_posts (
             run_key, facebook_post_id, action, category, topic_key, topic_text,
             source_url, source_title, content_text, content_hash, hook_type,
@@ -69,25 +65,32 @@ def record_candidate(
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
-        """
-        params = common + (candidate.style_experiment_key,) + tail
-    else:
-        # Transitional compatibility for direct callers/tests that have not run
-        # ensure_schema yet. Experiment exposure itself is never silently lost.
-        query = """
-        INSERT INTO content_posts (
-            run_key, facebook_post_id, action, category, topic_key, topic_text,
-            source_url, source_title, content_text, content_hash, hook_type,
-            style_type, cta_type, format_type, scheduled_for, published_at,
-            strategy_mode, quality_score, duplicate_score, strategy_version,
-            status, detail, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-        """
-        params = common + tail
+    """
+    experiment_params = common + (candidate.style_experiment_key,) + tail
 
-    rows = execute_fn(query, params)
+    try:
+        rows = execute_fn(experiment_query, experiment_params)
+    except Exception as error:
+        if not _missing_experiment_column(error):
+            raise
+        if candidate.style_experiment_key is not None:
+            raise RuntimeError("content_posts schema missing style_experiment_key") from error
+
+        # Transitional fallback for old direct SQLite callers/tests that have not
+        # run ensure_schema yet. A real experiment is never silently downgraded.
+        legacy_query = """
+            INSERT INTO content_posts (
+                run_key, facebook_post_id, action, category, topic_key, topic_text,
+                source_url, source_title, content_text, content_hash, hook_type,
+                style_type, cta_type, format_type, scheduled_for, published_at,
+                strategy_mode, quality_score, duplicate_score, strategy_version,
+                status, detail, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+        """
+        rows = execute_fn(legacy_query, common + tail)
+
     if not rows:
         return None
     return int(rows[0][0])
