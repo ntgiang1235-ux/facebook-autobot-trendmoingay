@@ -20,11 +20,12 @@ from app import (
     publication_ledger,
     reporting,
     scheduler,
+    style_evolution,
     style_steering,
 )
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
-from app.job_contract import JobOutcome, run_job, skipped
+from app.job_contract import JobOutcome, run_job, skipped, success
 
 VALID_ACTIONS = {
     "post",
@@ -39,6 +40,7 @@ VALID_ACTIONS = {
     "health",
     "metrics",
     "learn",
+    "style_evolve",
     "planner",
     "dispatch",
     "report_daily",
@@ -159,6 +161,23 @@ def _video_publish_callback(**metadata) -> None:
     )
 
 
+def _style_evolution_job() -> JobOutcome:
+    result = style_evolution.generate_next_experiment(
+        db.execute,
+        autobot.call_gemini,
+    )
+    if result.status == "created":
+        return success(result.detail)
+    if result.status in {
+        "pending_existing",
+        "insufficient_data",
+        "invalid_variant",
+        "duplicate_variant",
+    }:
+        return skipped(result.detail or result.status)
+    raise RuntimeError(result.detail or f"style evolution failed: {result.status}")
+
+
 def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], object]]:
     """Resolve jobs through shared DB, verified HTTP and explicit outcome adapters."""
     autobot.execute_db = db.execute
@@ -237,6 +256,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
     )
     jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
     jobs["learn"] = lambda: feedback_loop.refresh_strategy(db.execute)
+    jobs["style_evolve"] = _style_evolution_job
     jobs["report_daily"] = lambda: reporting.send_daily_report(
         db.execute,
         notifications.send_message,
@@ -332,7 +352,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|planner|dispatch|report_daily|report_weekly>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|style_evolve|planner|dispatch|report_daily|report_weekly>"
         )
     run_action(sys.argv[1])
 

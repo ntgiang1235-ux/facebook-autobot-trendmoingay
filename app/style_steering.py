@@ -19,6 +19,7 @@ _DIMENSIONS = (
     ("style_type", "tone"),
     ("cta_type", "cta"),
 )
+_REGISTRY_TO_STAT = {registry: stat for stat, registry in _DIMENSIONS}
 
 
 @dataclass(frozen=True)
@@ -51,36 +52,77 @@ def _weighted_mature_choice(stats: list[StrategyStat], dimension: str, rng) -> s
     )
 
 
-def _explore_choice(
-    execute_fn,
+def _explore_choice_from_registered(
     stats: list[StrategyStat],
     stat_dimension: str,
-    registry_dimension: str,
+    registered,
     rng,
 ) -> str | None:
-    registered = [
-        item.value
-        for item in list_active_styles(execute_fn, registry_dimension)
-        if item.status != "retired"
-    ]
-    if not registered:
+    values = [item.value for item in registered if item.status != "retired"]
+    if not values:
         return _weighted_mature_choice(stats, stat_dimension, rng)
 
     dimension_stats = [stat for stat in stats if stat.dimension == stat_dimension]
-    probabilities = exploration_probabilities(dimension_stats, registered)
+    probabilities = exploration_probabilities(dimension_stats, values)
     if probabilities:
         return weighted_choice(list(probabilities.items()), rng)
     return _weighted_mature_choice(stats, stat_dimension, rng)
 
 
-def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
-    """Select one learned style profile only after mature style evidence exists.
+def _registered_by_dimension(execute_fn):
+    return {
+        registry_dimension: list_active_styles(execute_fn, registry_dimension)
+        for _, registry_dimension in _DIMENSIONS
+    }
 
-    A single exploit/explore mode applies to the whole profile. Exploitation only
-    uses mature active strategy values. Exploration may choose an approved active
-    registry value that is unseen or under-sampled. Before any style dimension has
-    five mature samples the function returns None so legacy generation remains
-    untouched instead of overfitting early data.
+
+def _pending_experiments(registered_by_dimension):
+    pending = []
+    for _, registry_dimension in _DIMENSIONS:
+        for item in registered_by_dimension[registry_dimension]:
+            if item.status == "explore":
+                pending.append((registry_dimension, item))
+    return pending
+
+
+def _experiment_target(stats, registered_by_dimension, rng) -> StyleTarget | None:
+    pending = _pending_experiments(registered_by_dimension)
+    if not pending:
+        return None
+
+    option_keys = [
+        (f"{dimension}:{item.value}", 1.0)
+        for dimension, item in pending
+    ]
+    chosen_key = weighted_choice(option_keys, rng)
+    chosen_dimension, chosen_value = chosen_key.split(":", 1)
+    chosen_stat_dimension = _REGISTRY_TO_STAT[chosen_dimension]
+
+    values = {
+        stat_dimension: (
+            chosen_value
+            if stat_dimension == chosen_stat_dimension
+            else _weighted_mature_choice(stats, stat_dimension, rng)
+        )
+        for stat_dimension, _ in _DIMENSIONS
+    }
+    return StyleTarget(
+        hook_type=values["hook_type"],
+        style_type=values["style_type"],
+        cta_type=values["cta_type"],
+        mode="explore",
+        experiment_key=chosen_key,
+    )
+
+
+def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
+    """Select a mature profile, exposing at most one controlled experiment.
+
+    One exploit/explore mode applies to the whole profile. Exploitation only uses
+    mature active strategy values. During exploration, a pending custom experiment
+    gets priority and changes exactly one dimension; the other dimensions use
+    mature winners as controls. If no custom experiment is pending, exploration
+    falls back to approved registered under-sampled values as before.
     """
     config = load_config(execute_fn)
     if not config.adaptive_enabled:
@@ -98,19 +140,26 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
     generator = rng or random.SystemRandom()
     mode = select_mode(generator, config.exploration_rate)
 
-    values: dict[str, str | None] = {}
-    for stat_dimension, registry_dimension in _DIMENSIONS:
-        if mode == "explore":
-            selected = _explore_choice(
-                execute_fn,
+    if mode == "explore":
+        registered_by_dimension = _registered_by_dimension(execute_fn)
+        experiment = _experiment_target(stats, registered_by_dimension, generator)
+        if experiment is not None:
+            return experiment
+
+        values = {
+            stat_dimension: _explore_choice_from_registered(
                 stats,
                 stat_dimension,
-                registry_dimension,
+                registered_by_dimension[registry_dimension],
                 generator,
             )
-        else:
-            selected = _weighted_mature_choice(stats, stat_dimension, generator)
-        values[stat_dimension] = selected
+            for stat_dimension, registry_dimension in _DIMENSIONS
+        }
+    else:
+        values = {
+            stat_dimension: _weighted_mature_choice(stats, stat_dimension, generator)
+            for stat_dimension, _ in _DIMENSIONS
+        }
 
     if not any(values.values()):
         return None
