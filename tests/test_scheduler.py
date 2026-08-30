@@ -44,6 +44,22 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(meta.delay_minutes, 22)
         self.assertTrue(meta.stale)
 
+    def test_weekly_cron_uses_current_sunday_occurrence(self):
+        now = datetime(2026, 8, 30, 15, 2, tzinfo=timezone.utc)
+        meta = schedule_metadata("57 14 * * 0", now=now, stale_after_minutes=60)
+
+        self.assertEqual(meta.scheduled_for, datetime(2026, 8, 30, 14, 57, tzinfo=timezone.utc))
+        self.assertEqual(meta.delay_minutes, 5)
+        self.assertFalse(meta.stale)
+
+    def test_weekly_cron_rolls_back_to_previous_sunday(self):
+        now = datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
+        meta = schedule_metadata("57 14 * * 0", now=now, stale_after_minutes=1000)
+
+        self.assertEqual(meta.scheduled_for, datetime(2026, 8, 30, 14, 57, tzinfo=timezone.utc))
+        self.assertEqual(meta.delay_minutes, 603)
+        self.assertFalse(meta.stale)
+
     def test_manual_run_has_no_schedule_metadata(self):
         now = datetime(2026, 8, 29, 14, 11, tzinfo=timezone.utc)
         meta = schedule_metadata("", now=now)

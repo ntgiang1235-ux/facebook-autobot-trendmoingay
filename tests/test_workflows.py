@@ -46,6 +46,16 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f'cron: "{cron}"', prod)
             self.assertIn(f'"{cron}") ACTION="{action}"', prod)
 
+    def test_reporting_jobs_have_daily_and_weekly_fixed_schedules(self):
+        prod = (ROOT / ".github/workflows/facebook-autobot.yml").read_text(encoding="utf-8")
+
+        self.assertIn('cron: "47 14 * * *"', prod)
+        self.assertIn('cron: "57 14 * * 0"', prod)
+        self.assertIn('"47 14 * * *") ACTION="report_daily"', prod)
+        self.assertIn('"57 14 * * 0") ACTION="report_weekly"', prod)
+        self.assertIn("          - report_daily", prod)
+        self.assertIn("          - report_weekly", prod)
+
     def test_fixed_content_crons_are_removed_after_dispatcher_cutover(self):
         prod = (ROOT / ".github/workflows/facebook-autobot.yml").read_text(encoding="utf-8")
 

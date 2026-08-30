@@ -29,13 +29,13 @@ def schedule_metadata(
     now: datetime | None = None,
     stale_after_minutes: int = 60,
 ) -> ScheduleMetadata:
-    """Return timing metadata for supported daily or recurring GitHub cron schedules."""
+    """Return timing metadata for supported daily, weekly or dispatcher crons."""
     cron = (cron or "").strip()
     if not cron:
         return ScheduleMetadata(None, None, False)
 
     fields = cron.split()
-    if len(fields) != 5 or fields[2:] != ["*", "*", "*"]:
+    if len(fields) != 5 or fields[2] != "*" or fields[3] != "*":
         raise _cron_not_supported(cron)
 
     current = now or datetime.now(timezone.utc)
@@ -43,9 +43,11 @@ def schedule_metadata(
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
 
-    minute_field, hour_field = fields[:2]
+    minute_field, hour_field, _, _, weekday_field = fields
 
     if hour_field == "*":
+        if weekday_field != "*":
+            raise _cron_not_supported(cron)
         # The dispatcher uses a small explicit minute list (for example
         # ``7,37 * * * *``) so GitHub only wakes the bot twice per hour while
         # Turso remains the source of truth for actual publishing slots.
@@ -61,8 +63,6 @@ def schedule_metadata(
                 - timedelta(hours=1)
             )
     else:
-        # Preserve the original fixed daily cron contract used by health,
-        # reply, summary, metrics and planner jobs.
         if "," in minute_field:
             raise _cron_not_supported(cron)
         try:
@@ -73,11 +73,28 @@ def schedule_metadata(
         if not 0 <= minute <= 59 or not 0 <= hour <= 23:
             raise _cron_not_supported(cron)
 
-        scheduled_for = current.replace(
-            hour=hour, minute=minute, second=0, microsecond=0
-        )
-        if scheduled_for > current:
-            scheduled_for -= timedelta(days=1)
+        if weekday_field == "*":
+            scheduled_for = current.replace(
+                hour=hour, minute=minute, second=0, microsecond=0
+            )
+            if scheduled_for > current:
+                scheduled_for -= timedelta(days=1)
+        else:
+            try:
+                target_weekday = int(weekday_field)
+            except ValueError as exc:
+                raise _cron_not_supported(cron) from exc
+            if not 0 <= target_weekday <= 6:
+                raise _cron_not_supported(cron)
+
+            # GitHub cron: Sunday=0. Python isoweekday(): Monday=1..Sunday=7.
+            current_weekday = current.isoweekday() % 7
+            days_back = (current_weekday - target_weekday) % 7
+            scheduled_for = (current - timedelta(days=days_back)).replace(
+                hour=hour, minute=minute, second=0, microsecond=0
+            )
+            if scheduled_for > current:
+                scheduled_for -= timedelta(days=7)
 
     delay_minutes = max(0, int((current - scheduled_for).total_seconds() // 60))
     return ScheduleMetadata(
