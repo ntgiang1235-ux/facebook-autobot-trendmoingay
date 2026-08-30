@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import autobot
@@ -9,11 +9,14 @@ import metrics_runner
 import runner
 from app import (
     adaptive_jobs,
+    content_repository,
     db,
+    dedup,
     dispatcher,
     feedback_loop,
     health,
     notifications,
+    prepublish_guard,
     publication_ledger,
     reporting,
     scheduler,
@@ -84,6 +87,30 @@ def _runner_primary_publish(endpoint: str) -> bool:
     return endpoint in {"me/feed", "me/photos"}
 
 
+def _adaptive_before_publish(action: str):
+    """Build a bounded pre-publish guard for one adaptive content category."""
+
+    def guard(endpoint: str, request_data: dict):
+        current = datetime.now(timezone.utc)
+        since = (current - timedelta(days=dedup.anti_repeat_days(action))).isoformat()
+        recent = content_repository.recent_content(
+            db.execute,
+            action,
+            since,
+            30,
+        )
+        return prepublish_guard.evaluate_request(
+            action=action,
+            endpoint=endpoint,
+            request_data=request_data,
+            recent=recent,
+            gemini_fn=lambda prompt: autobot.call_gemini(prompt),
+            now=current,
+        )
+
+    return guard
+
+
 def _adaptive_publish_callback(action: str):
     def callback(endpoint: str, request_data: dict, response: dict) -> None:
         publication_ledger.record_published_content(
@@ -120,6 +147,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             lambda endpoint: endpoint == "me/feed",
             allow_skip=True,
             on_published=_adaptive_publish_callback("post"),
+            before_publish=_adaptive_before_publish("post"),
         ),
         "reply": adapt_reply_job(autobot.auto_reply_job, autobot),
         "finance": adapt_publish_job(
@@ -128,6 +156,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
             on_published=_adaptive_publish_callback("finance"),
+            before_publish=_adaptive_before_publish("finance"),
         ),
         "philosophy": adapt_publish_job(
             autobot.philosophy_post_job,
@@ -135,6 +164,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
             on_published=_adaptive_publish_callback("philosophy"),
+            before_publish=_adaptive_before_publish("philosophy"),
         ),
         "summary": adapt_publish_job(
             autobot.daily_summary_job,
@@ -153,6 +183,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             _runner_primary_publish,
             allow_skip=False,
             on_published=_adaptive_publish_callback("recipe"),
+            before_publish=_adaptive_before_publish("recipe"),
         ),
         "fun": adapt_publish_job(
             runner.fun_job,
@@ -160,6 +191,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             _runner_primary_publish,
             allow_skip=False,
             on_published=_adaptive_publish_callback("fun"),
+            before_publish=_adaptive_before_publish("fun"),
         ),
     }
 
