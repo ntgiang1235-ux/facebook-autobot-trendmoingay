@@ -7,6 +7,7 @@ from app.prepublish_guard import PrePublishDecision
 class RecordingModule:
     def __init__(self):
         self.fb_calls = []
+        self.gemini_calls = []
         self.delivery_calls = []
         self.saved_posts = []
 
@@ -15,6 +16,7 @@ class RecordingModule:
         return 200, {"id": "real-post-1"}
 
     def call_gemini(self, prompt, timeout=30):
+        self.gemini_calls.append((prompt, timeout))
         return "ok"
 
     def send_tele(self, message):
@@ -61,6 +63,7 @@ class PrePublishAdapterTests(unittest.TestCase):
         def legacy_job():
             code, payload = module.call_fb_api("me/photos", {"message": "duplicate"}, files={"source": object()})
             if code == 200:
+                module.call_gemini("seed comment")
                 module.call_fb_api(f"{payload['id']}/comments", {"message": "seed"})
                 module.send_tele("published")
 
@@ -84,6 +87,7 @@ class PrePublishAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "skipped")
         self.assertIn("same recent topic", outcome.detail)
         self.assertEqual(module.fb_calls, [])
+        self.assertEqual(module.gemini_calls, [])
         self.assertEqual(module.delivery_calls, [])
 
     def test_rejected_decision_does_not_mutate_legacy_posted_history(self):
