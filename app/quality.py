@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from app.content_models import ContentCandidate, RecentContent
+from app.style_registry import SEED_STYLES
 
 
 QUALITY_RECENT_LIMIT = 12
@@ -24,6 +25,9 @@ class QualityDecision:
     score: float
     action: str
     reasons: tuple[str, ...] = ()
+    hook_type: str = "unknown"
+    style_type: str = "unknown"
+    cta_type: str = "none"
 
 
 def _finite_number(value: object, field: str = "value") -> float:
@@ -95,6 +99,13 @@ def _required_score(data: dict, key: str) -> float:
     return _finite_number(data.get(key), key)
 
 
+def _classified_value(data: dict, key: str, allowed: tuple[str, ...], fallback: str) -> str:
+    value = data.get(key)
+    if isinstance(value, str) and value in allowed:
+        return value
+    return fallback
+
+
 def assess_draft(
     candidate: ContentCandidate,
     recent: list[RecentContent],
@@ -109,7 +120,10 @@ def assess_draft(
         "Assess this Facebook draft. Return JSON only with numeric fields novelty, hook, "
         "usefulness, readability, tone, cta (0-100); boolean fields semantic_duplicate, "
         "hook_too_similar, excessive_clickbait, repetitive_cta, format_length_violation; "
-        "and a short string reason.\n"
+        "short string reason; and classification strings hook_type, style_type, cta_type. "
+        f"hook_type must be one of {list(SEED_STYLES['hook'])}; "
+        f"style_type must be one of {list(SEED_STYLES['tone'])}; "
+        f"cta_type must be one of {list(SEED_STYLES['cta'])}.\n"
         f"Category: {candidate.category}\n"
         f"Topic: {candidate.topic_text}\n"
         f"Hook type: {candidate.hook_type}\n"
@@ -156,7 +170,15 @@ def assess_draft(
         score = combine_quality_score(rubric, penalties)
         if reason.strip():
             reasons.append(reason.strip())
-        return decision_for_score(score, tuple(reasons))
+        base = decision_for_score(score, tuple(reasons))
+        return QualityDecision(
+            score=base.score,
+            action=base.action,
+            reasons=base.reasons,
+            hook_type=_classified_value(data, "hook_type", SEED_STYLES["hook"], "unknown"),
+            style_type=_classified_value(data, "style_type", SEED_STYLES["tone"], "unknown"),
+            cta_type=_classified_value(data, "cta_type", SEED_STYLES["cta"], "none"),
+        )
     except Exception:
         return QualityDecision(
             score=65.0,
