@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 import app.db as db
@@ -128,13 +129,16 @@ class StyleExperimentTrackingTests(unittest.TestCase):
                     (
                         "post-1", "fun", "2026-08-30T13:00:00+00:00",
                         "question", "witty", "choose_side", "text",
-                        "tone:witty-short-punchline",
                         81.0, "final", "2026-08-30T13:02:00+00:00",
+                        "tone:witty-short-punchline",
                     )
                 ]
             return []
 
-        rows = load_learning_observations(execute, now=__import__("datetime").datetime.fromisoformat("2026-08-31T00:00:00+00:00"))
+        rows = load_learning_observations(
+            execute,
+            now=datetime.fromisoformat("2026-08-31T00:00:00+00:00"),
+        )
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].style_experiment_key, "tone:witty-short-punchline")
