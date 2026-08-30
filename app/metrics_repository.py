@@ -80,45 +80,46 @@ def save_snapshot(execute_fn, snapshot: MetricSnapshot) -> None:
 def due_posts(execute_fn, now_iso: str) -> list[DuePost]:
     rows = execute_fn(
         """
-        SELECT cp.id, cp.facebook_post_id, cp.published_at,
+        WITH clock(now_iso) AS (VALUES (?)), eligible AS (
+            SELECT cp.id,
+                   cp.facebook_post_id,
+                   cp.published_at,
+                   (julianday(clock.now_iso) - julianday(cp.published_at)) * 24 AS age_hours
+            FROM content_posts cp, clock
+            WHERE cp.status = 'published'
+              AND cp.facebook_post_id IS NOT NULL
+              AND cp.published_at IS NOT NULL
+        )
+        SELECT e.id, e.facebook_post_id, e.published_at,
                CASE
-                   WHEN (julianday(?) - julianday(cp.published_at)) * 24 >= 72
-                        AND NOT EXISTS (
-                            SELECT 1 FROM content_metrics cm
-                            WHERE cm.facebook_post_id = cp.facebook_post_id
-                              AND cm.score_kind = 'final'
-                        )
-                   THEN 'final'
-                   WHEN (julianday(?) - julianday(cp.published_at)) * 24 >= 24
-                        AND NOT EXISTS (
-                            SELECT 1 FROM content_metrics cm
-                            WHERE cm.facebook_post_id = cp.facebook_post_id
-                              AND cm.score_kind = 'early'
-                        )
-                   THEN 'early'
+                   WHEN e.age_hours >= 72 AND NOT EXISTS (
+                       SELECT 1 FROM content_metrics cm
+                       WHERE cm.facebook_post_id = e.facebook_post_id
+                         AND cm.score_kind = 'final'
+                   ) THEN 'final'
+                   WHEN e.age_hours >= 24 AND e.age_hours < 72 AND NOT EXISTS (
+                       SELECT 1 FROM content_metrics cm
+                       WHERE cm.facebook_post_id = e.facebook_post_id
+                         AND cm.score_kind = 'early'
+                   ) THEN 'early'
                END AS score_kind
-        FROM content_posts cp
-        WHERE cp.status = 'published'
-          AND cp.facebook_post_id IS NOT NULL
-          AND cp.published_at IS NOT NULL
-          AND (
-              ((julianday(?) - julianday(cp.published_at)) * 24 >= 72 AND NOT EXISTS (
-                  SELECT 1 FROM content_metrics cm
-                  WHERE cm.facebook_post_id = cp.facebook_post_id
-                    AND cm.score_kind = 'final'
-              ))
-              OR
-              ((julianday(?) - julianday(cp.published_at)) * 24 >= 24
-               AND (julianday(?) - julianday(cp.published_at)) * 24 < 72
-               AND NOT EXISTS (
-                  SELECT 1 FROM content_metrics cm
-                  WHERE cm.facebook_post_id = cp.facebook_post_id
-                    AND cm.score_kind = 'early'
-              ))
-          )
-        ORDER BY cp.published_at ASC
+        FROM eligible e
+        WHERE (
+            e.age_hours >= 72 AND NOT EXISTS (
+                SELECT 1 FROM content_metrics cm
+                WHERE cm.facebook_post_id = e.facebook_post_id
+                  AND cm.score_kind = 'final'
+            )
+        ) OR (
+            e.age_hours >= 24 AND e.age_hours < 72 AND NOT EXISTS (
+                SELECT 1 FROM content_metrics cm
+                WHERE cm.facebook_post_id = e.facebook_post_id
+                  AND cm.score_kind = 'early'
+            )
+        )
+        ORDER BY e.published_at ASC
         """,
-        (now_iso, now_iso, now_iso, now_iso, now_iso),
+        (now_iso,),
     )
     return [DuePost(int(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in rows]
 
