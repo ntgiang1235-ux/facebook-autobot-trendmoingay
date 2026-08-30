@@ -20,6 +20,7 @@ from app import (
     publication_ledger,
     reporting,
     scheduler,
+    style_steering,
 )
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
@@ -99,6 +100,15 @@ def _adaptive_before_publish(action: str):
             since,
             30,
         )
+        try:
+            style_target = style_steering.select_style_target(db.execute)
+        except Exception as error:
+            # Style steering is an optimization layer. If strategy state is
+            # temporarily unavailable, keep the mandatory dedup + quality gate
+            # active instead of turning an optional optimization into a publish
+            # outage.
+            print(f"⚠️ Style steering unavailable; using unsteered draft: {error}")
+            style_target = None
         return prepublish_guard.evaluate_request(
             action=action,
             endpoint=endpoint,
@@ -106,6 +116,7 @@ def _adaptive_before_publish(action: str):
             recent=recent,
             gemini_fn=lambda prompt: autobot.call_gemini(prompt),
             now=current,
+            style_target=style_target,
         )
 
     return guard
