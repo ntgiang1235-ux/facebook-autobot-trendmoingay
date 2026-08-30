@@ -106,7 +106,7 @@ class HardeningRunnerTests(unittest.TestCase):
             set(jobs),
             {
                 "post", "reply", "finance", "philosophy", "summary", "veo",
-                "recipe", "fun", "video", "health", "metrics", "learn", "planner", "dispatch",
+                "recipe", "fun", "video", "health", "metrics", "learn", "style_evolve", "planner", "dispatch",
                 "report_daily", "report_weekly"
             },
         )
