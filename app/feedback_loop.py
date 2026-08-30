@@ -28,6 +28,11 @@ SKIP_VALUES = {
     "cta_type": {"", "unknown", "none"},
     "format_type": {"", "unknown"},
 }
+_EXPERIMENT_TO_DIMENSION = {
+    "hook": "hook_type",
+    "tone": "style_type",
+    "cta": "cta_type",
+}
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,38 @@ def _dimension_value(observation: LearningObservation, dimension: str) -> str | 
     return str(getattr(observation, dimension))
 
 
+def _experiment_projection(
+    observation: LearningObservation,
+) -> tuple[str, str] | None:
+    key = observation.style_experiment_key
+    if not key or ":" not in key:
+        return None
+    registry_dimension, value = key.split(":", 1)
+    dimension = _EXPERIMENT_TO_DIMENSION.get(registry_dimension.strip())
+    value = value.strip()
+    if dimension is None or not value:
+        return None
+    return dimension, value
+
+
+def _style_registry_statuses(execute_fn) -> dict[tuple[str, str], str]:
+    try:
+        rows = execute_fn(
+            "SELECT dimension, value, status FROM style_registry",
+            (),
+        )
+    except Exception:
+        return {}
+
+    statuses: dict[tuple[str, str], str] = {}
+    for registry_dimension, value, status in rows:
+        dimension = _EXPERIMENT_TO_DIMENSION.get(str(registry_dimension))
+        if dimension is None:
+            continue
+        statuses[(dimension, str(value))] = str(status)
+    return statuses
+
+
 def _included_values(observations: list[LearningObservation], dimension: str) -> list[str]:
     if dimension == "category":
         return list(CORE_ACTIONS)
@@ -94,11 +131,15 @@ def _included_values(observations: list[LearningObservation], dimension: str) ->
     blocked = SKIP_VALUES.get(dimension, set())
     for observation in observations:
         value = _dimension_value(observation, dimension)
-        if value is None or value in blocked:
-            continue
-        if dimension == "time_bucket" and value not in SAFE_TIME_BUCKETS:
-            continue
-        values.add(value)
+        if value is not None and value not in blocked:
+            if dimension != "time_bucket" or value in SAFE_TIME_BUCKETS:
+                values.add(value)
+
+        projection = _experiment_projection(observation)
+        if projection is not None and projection[0] == dimension:
+            projected_value = projection[1]
+            if projected_value not in blocked:
+                values.add(projected_value)
     return sorted(values)
 
 
@@ -108,7 +149,10 @@ def _samples_for(
     samples: list[LearningSample] = []
     last_used: datetime | None = None
     for observation in observations:
-        if _dimension_value(observation, dimension) != value:
+        observed_match = _dimension_value(observation, dimension) == value
+        projection = _experiment_projection(observation)
+        projected_match = projection == (dimension, value)
+        if not observed_match and not projected_match:
             continue
         samples.append(
             LearningSample(
@@ -237,19 +281,33 @@ def _category_stats(
     return result
 
 
-def _regular_dimension_stats(raw_stats: list[StrategyStat]) -> list[StrategyStat]:
+def _regular_dimension_stats(
+    raw_stats: list[StrategyStat],
+    registry_statuses: dict[tuple[str, str], str] | None = None,
+) -> list[StrategyStat]:
     if not raw_stats:
         return []
+    registry = registry_statuses or {}
     current_weights = {stat.value: stat.current_weight for stat in raw_stats}
     proposals = {}
     active_values = set()
     statuses = {}
 
     for stat in raw_stats:
-        if stat.status in {"retired", "suspended"}:
-            statuses[stat.value] = stat.status
+        registry_status = registry.get((stat.dimension, stat.value))
+        if registry_status == "retired" or stat.status == "retired":
+            statuses[stat.value] = "retired"
             proposals[stat.value] = 0.0
             continue
+        if registry_status == "explore":
+            statuses[stat.value] = "insufficient_data"
+            proposals[stat.value] = 0.0
+            continue
+        if stat.status == "suspended":
+            statuses[stat.value] = "suspended"
+            proposals[stat.value] = 0.0
+            continue
+
         status = "active" if stat.sample_count >= MIN_MATURE_SAMPLES else "insufficient_data"
         statuses[stat.value] = status
         active_values.add(stat.value)
@@ -310,6 +368,7 @@ def refresh_strategy(execute_fn, *, now: datetime | None = None) -> StrategyRefr
     existing_stats = {
         (stat.dimension, stat.value): stat for stat in load_stats(execute_fn)
     }
+    registry_statuses = _style_registry_statuses(execute_fn)
 
     dimensions = (
         "category",
@@ -332,7 +391,7 @@ def refresh_strategy(execute_fn, *, now: datetime | None = None) -> StrategyRefr
         if dimension == "category":
             refreshed.extend(_category_stats(raw, config, current))
         else:
-            refreshed.extend(_regular_dimension_stats(raw))
+            refreshed.extend(_regular_dimension_stats(raw, registry_statuses))
 
     for stat in refreshed:
         upsert_stat(execute_fn, stat)
