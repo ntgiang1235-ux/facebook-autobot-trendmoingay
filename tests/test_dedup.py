@@ -135,5 +135,108 @@ class LocalDedupTests(unittest.TestCase):
         self.assertIsNone(decision)
 
 
+class SemanticDedupTests(unittest.TestCase):
+    def make_candidate(self):
+        return ContentCandidate(
+            category="news",
+            topic_key="storm-central-vietnam",
+            topic_text="Miền Trung chuẩn bị ứng phó cơn bão đang áp sát",
+            content_text="Nội dung mới",
+        )
+
+    def make_recent(self, index):
+        return RecentContent(
+            id=index,
+            category="news",
+            topic_key=f"topic-{index}",
+            topic_text=f"Topic {index} unique marker",
+            content_text=f"Recent content {index}",
+            source_url=f"https://example.test/{index}",
+            published_at="2026-08-29T08:00:00+00:00",
+        )
+
+    def test_semantic_duplicate_parses_structured_result(self):
+        from app.dedup import check_semantic_duplicate
+
+        captured = []
+
+        def gemini(prompt):
+            captured.append(prompt)
+            return '{"duplicate": true, "similarity": 0.91, "reason": "same event"}'
+
+        decision = check_semantic_duplicate(
+            self.make_candidate(),
+            [self.make_recent(1)],
+            gemini,
+        )
+
+        self.assertTrue(decision.duplicate)
+        self.assertEqual(decision.layer, "semantic")
+        self.assertAlmostEqual(decision.score, 0.91)
+        self.assertEqual(decision.reason, "same event")
+        self.assertEqual(len(captured), 1)
+
+    def test_semantic_prompt_is_bounded_to_first_twenty_recent_items(self):
+        from app.dedup import check_semantic_duplicate
+
+        captured = []
+
+        def gemini(prompt):
+            captured.append(prompt)
+            return '{"duplicate": false, "similarity": 0.25, "reason": "different"}'
+
+        decision = check_semantic_duplicate(
+            self.make_candidate(),
+            [self.make_recent(i) for i in range(25)],
+            gemini,
+        )
+
+        self.assertFalse(decision.duplicate)
+        self.assertIn("Topic 19 unique marker", captured[0])
+        self.assertNotIn("Topic 20 unique marker", captured[0])
+        self.assertNotIn("Topic 24 unique marker", captured[0])
+
+    def test_semantic_parser_accepts_fenced_json_and_clamps_similarity(self):
+        from app.dedup import check_semantic_duplicate
+
+        def gemini(prompt):
+            return '```json\n{"duplicate": true, "similarity": 5, "reason": "same"}\n```'
+
+        decision = check_semantic_duplicate(self.make_candidate(), [], gemini)
+
+        self.assertTrue(decision.duplicate)
+        self.assertEqual(decision.score, 1.0)
+        self.assertEqual(decision.layer, "semantic")
+
+    def test_malformed_semantic_result_is_unavailable_not_duplicate(self):
+        from app.dedup import check_semantic_duplicate
+
+        decision = check_semantic_duplicate(
+            self.make_candidate(),
+            [self.make_recent(1)],
+            lambda prompt: "not-json",
+        )
+
+        self.assertFalse(decision.duplicate)
+        self.assertEqual(decision.score, 0.0)
+        self.assertEqual(decision.layer, "semantic_unavailable")
+        self.assertEqual(decision.reason, "semantic check unavailable")
+
+    def test_semantic_api_error_is_unavailable_not_exception(self):
+        from app.dedup import check_semantic_duplicate
+
+        def gemini(prompt):
+            raise RuntimeError("api unavailable")
+
+        decision = check_semantic_duplicate(
+            self.make_candidate(),
+            [self.make_recent(1)],
+            gemini,
+        )
+
+        self.assertFalse(decision.duplicate)
+        self.assertEqual(decision.layer, "semantic_unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()
