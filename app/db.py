@@ -118,6 +118,37 @@ def ensure_schema() -> None:
         """
     )
 
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS content_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            facebook_post_id TEXT NOT NULL,
+            measured_at TEXT NOT NULL,
+            age_hours INTEGER NOT NULL,
+            reactions INTEGER NOT NULL,
+            comments INTEGER NOT NULL,
+            shares INTEGER NOT NULL,
+            reach INTEGER,
+            impressions INTEGER,
+            video_views INTEGER,
+            follower_delta INTEGER,
+            engagement_rate REAL,
+            content_score REAL NOT NULL,
+            metric_capabilities TEXT NOT NULL,
+            score_kind TEXT NOT NULL,
+            UNIQUE(facebook_post_id, score_kind)
+        )
+        """
+    )
+    execute(
+        "CREATE INDEX IF NOT EXISTS idx_content_metrics_score_kind "
+        "ON content_metrics(score_kind, measured_at)"
+    )
+    execute(
+        "CREATE INDEX IF NOT EXISTS idx_content_metrics_facebook_id "
+        "ON content_metrics(facebook_post_id)"
+    )
+
 
 def record_job(
     run_key: str,
