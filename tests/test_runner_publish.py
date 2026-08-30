@@ -3,6 +3,20 @@ from unittest.mock import patch
 
 import hardening_runner
 import runner
+from app.prepublish_guard import PrePublishDecision
+
+
+def allow_publish(endpoint, request_data):
+    del endpoint
+    return PrePublishDecision(
+        publish=True,
+        status="ready",
+        request_data=dict(request_data),
+        quality_score=80.0,
+        duplicate_score=0.1,
+        rewrite_count=0,
+        detail="test fixture ready",
+    )
 
 
 class RunnerPublishTests(unittest.TestCase):
@@ -14,7 +28,9 @@ class RunnerPublishTests(unittest.TestCase):
             runner, "find_image", return_value=None
         ), patch.object(
             runner.autobot, "call_fb_api", return_value=(200, {})
-        ), patch.object(runner.autobot, "validate_runtime_config"):
+        ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner, "_adaptive_before_publish", return_value=allow_publish
+        ):
             jobs = self._jobs()
             with self.assertRaises(RuntimeError):
                 jobs["fun"]()
@@ -24,7 +40,9 @@ class RunnerPublishTests(unittest.TestCase):
             runner, "find_recipe_image", return_value=None
         ), patch.object(
             runner.autobot, "call_fb_api", return_value=(200, {})
-        ), patch.object(runner.autobot, "validate_runtime_config"):
+        ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner, "_adaptive_before_publish", return_value=allow_publish
+        ):
             jobs = self._jobs()
             with self.assertRaises(RuntimeError):
                 jobs["recipe"]()
@@ -40,6 +58,8 @@ class RunnerPublishTests(unittest.TestCase):
                 (500, {"error": "seed failed"}),
             ],
         ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner, "_adaptive_before_publish", return_value=allow_publish
+        ), patch.object(
             hardening_runner.publication_ledger,
             "record_published_content",
             return_value=1,
