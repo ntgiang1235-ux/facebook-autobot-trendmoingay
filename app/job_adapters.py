@@ -25,9 +25,13 @@ def adapt_publish_job(
     operations such as seed comments remain best-effort after the primary post
     has succeeded. When supplied, ``on_published`` receives the endpoint, a
     pristine copy of the outbound request data and the successful Facebook
-    response. Capturing request data before the underlying helper runs prevents
-    injected credentials such as ``access_token`` from reaching the ledger.
-    Callback failures remain fatal for ledger consistency.
+    response.
+
+    Publication metadata is captured inside the Facebook wrapper but the
+    callback itself runs only after the legacy job returns. This boundary is
+    intentional: some legacy image helpers catch exceptions from a publish call
+    and retry as text. A Turso/ledger exception must never be mistaken for a
+    Facebook upload exception and trigger a duplicate publish.
     """
 
     def adapted() -> JobOutcome:
@@ -36,10 +40,11 @@ def adapt_publish_job(
         primary_attempted = False
         primary_success = False
         primary_failure = None
+        published_metadata = None
         gemini_failed_before_publish = False
 
         def tracked_fb(endpoint, data, files=None):
-            nonlocal primary_attempted, primary_success, primary_failure
+            nonlocal primary_attempted, primary_success, primary_failure, published_metadata
             request_data = dict(data) if isinstance(data, dict) else {}
             code, payload = original_fb(endpoint, data, files=files)
             if primary_predicate(endpoint):
@@ -47,9 +52,13 @@ def adapt_publish_job(
                 if _facebook_publish_succeeded(code, payload):
                     primary_success = True
                     primary_failure = None
-                    if on_published is not None:
-                        on_published(endpoint, request_data, payload)
-                else:
+                    if published_metadata is None:
+                        published_metadata = (
+                            endpoint,
+                            request_data,
+                            dict(payload),
+                        )
+                elif not primary_success:
                     primary_failure = (endpoint, code, payload)
             return code, payload
 
@@ -79,6 +88,8 @@ def adapt_publish_job(
             )
 
         if primary_success:
+            if on_published is not None and published_metadata is not None:
+                on_published(*published_metadata)
             return success()
 
         if allow_skip and not primary_attempted:
