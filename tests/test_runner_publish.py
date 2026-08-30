@@ -52,7 +52,7 @@ class RunnerPublishTests(unittest.TestCase):
             hardening_runner, "_adaptive_before_publish", return_value=allow_publish
         ):
             jobs = self._jobs()
-            with self.assertRaisesRegex(RuntimeError, "primary Facebook publish failed"):
+            with self.assertRaisesRegex(RuntimeError, "Lỗi đăng bài ẩm thực"):
                 jobs["recipe"]()
 
     def test_recipe_seed_comment_failure_after_publish_is_best_effort(self):
