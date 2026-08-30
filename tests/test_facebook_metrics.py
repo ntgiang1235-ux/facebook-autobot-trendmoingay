@@ -34,6 +34,11 @@ class FakeSession:
         return FakeResponse(self.base_payload, self.base_status)
 
 
+class BrokenSession:
+    def get(self, url, params=None, timeout=None):
+        raise OSError("network reset")
+
+
 class FacebookMetricsTests(unittest.TestCase):
     def engagement_payload(self):
         return {
@@ -110,6 +115,12 @@ class FacebookMetricsTests(unittest.TestCase):
         http = FakeSession({"error": {"message": "expired token"}}, base_status=401)
         with self.assertRaises(FacebookMetricsError):
             collect_post_metrics(http, "post-5", "token")
+
+    def test_graph_network_error_is_normalized_as_facebook_metrics_error(self):
+        from app.facebook_metrics import FacebookMetricsError, collect_post_metrics
+
+        with self.assertRaisesRegex(FacebookMetricsError, "kết nối"):
+            collect_post_metrics(BrokenSession(), "post-6", "token")
 
 
 if __name__ == "__main__":
