@@ -10,9 +10,9 @@ class MetricSnapshot:
     facebook_post_id: str
     measured_at: str
     age_hours: int
-    reactions: int
-    comments: int
-    shares: int
+    reactions: int | None
+    comments: int | None
+    shares: int | None
     reach: int | None
     impressions: int | None
     video_views: int | None
@@ -137,3 +137,54 @@ def recent_final_scores(execute_fn, limit: int = 30) -> list[float]:
         (limit,),
     )
     return [float(row[0]) for row in rows if row[0] is not None]
+
+
+def load_scoring_baseline(execute_fn, limit: int = 30):
+    from app.scoring import ScoringBaseline, weighted_interactions
+
+    rows = execute_fn(
+        """
+        SELECT reactions, comments, shares, reach, impressions, follower_delta
+        FROM content_metrics
+        WHERE score_kind = 'final'
+        ORDER BY measured_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+
+    engagement_rates = []
+    interaction_values = []
+    reach_values = []
+    impression_values = []
+    conversation_values = []
+    follower_values = []
+
+    for reactions, comments, shares, reach, impressions, follower_delta in rows:
+        if reactions is not None and comments is not None and shares is not None:
+            interactions = weighted_interactions(int(reactions), int(comments), int(shares))
+            interaction_values.append(interactions)
+            denominator = None
+            if reach is not None and float(reach) > 0:
+                denominator = float(reach)
+            elif impressions is not None and float(impressions) > 0:
+                denominator = float(impressions)
+            if denominator is not None:
+                engagement_rates.append(interactions / denominator)
+        if reach is not None:
+            reach_values.append(float(reach))
+        if impressions is not None:
+            impression_values.append(float(impressions))
+        if comments is not None and shares is not None:
+            conversation_values.append(float(comments) + 3.0 * float(shares))
+        if follower_delta is not None:
+            follower_values.append(float(follower_delta))
+
+    return ScoringBaseline(
+        engagement_rates=tuple(engagement_rates),
+        weighted_interactions=tuple(interaction_values),
+        reach=tuple(reach_values),
+        impressions=tuple(impression_values),
+        conversation=tuple(conversation_values),
+        follower_delta=tuple(follower_values),
+    )
