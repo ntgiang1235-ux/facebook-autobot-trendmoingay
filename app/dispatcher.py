@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app.creative_strategy import select_creative_profile
 from app.job_contract import JobOutcome, skipped, success
 from app.plan_repository import claim_due_slot, finish_slot
 from app.publication_context import PublicationContext, use_publication_context
@@ -63,14 +64,23 @@ def dispatch_due(
         _finish_failure_best_effort(execute_fn, slot, run_key, current, str(error))
         raise error
 
-    context = PublicationContext(
-        run_key=run_key,
-        category=slot.category,
-        scheduled_for=slot.planned_for,
-        strategy_mode=slot.strategy_mode,
-        strategy_version=slot.strategy_version,
-    )
     try:
+        profile = select_creative_profile(
+            execute_fn,
+            run_key=run_key,
+            category=slot.category,
+            strategy_version=slot.strategy_version,
+        )
+        context = PublicationContext(
+            run_key=run_key,
+            category=slot.category,
+            scheduled_for=slot.planned_for,
+            strategy_mode=slot.strategy_mode,
+            strategy_version=slot.strategy_version,
+            hook_type=profile.hook_type,
+            style_type=profile.style_type,
+            cta_type=profile.cta_type,
+        )
         with use_publication_context(context):
             result = job_fn()
     except Exception as exc:

@@ -9,6 +9,7 @@ import metrics_runner
 import runner
 from app import (
     adaptive_jobs,
+    creative_strategy,
     db,
     dispatcher,
     feedback_loop,
@@ -48,6 +49,14 @@ ADAPTIVE_CONTENT_ACTIONS = (
     "recipe",
     "video",
 )
+CREATIVE_PROMPT_MARKERS = {
+    "post": ("Viết status FB cho tin:",),
+    "finance": ("cập nhật tỷ giá ngoại tệ",),
+    "philosophy": ("Câu nói hôm nay là:",),
+    "fun": ("status tấu hài",),
+    "recipe": ("Chiều nay ăn gì?",),
+    "video": ("caption Facebook Reels",),
+}
 
 
 def utc_now_iso() -> str:
@@ -78,6 +87,17 @@ def _validated_text_job(action: str, job_fn: Callable[[], object]) -> Callable[[
         return job_fn()
 
     return validated
+
+
+def _creative_prompt_job(job_fn, gemini_module, markers: tuple[str, ...]):
+    def creative():
+        return creative_strategy.run_with_creative_prompt(
+            job_fn,
+            gemini_module,
+            markers=markers,
+        )
+
+    return creative
 
 
 def _runner_primary_publish(endpoint: str) -> bool:
@@ -167,9 +187,21 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
         action: _validated_text_job(action, job_fn)
         for action, job_fn in text_jobs.items()
     }
-    jobs["video"] = lambda: autobotvideo.video_post_job(
+    for action in ("post", "finance", "philosophy", "fun", "recipe"):
+        jobs[action] = _creative_prompt_job(
+            jobs[action],
+            autobot,
+            CREATIVE_PROMPT_MARKERS[action],
+        )
+
+    video_job = lambda: autobotvideo.video_post_job(
         dry_run=False,
         on_published=_video_publish_callback,
+    )
+    jobs["video"] = _creative_prompt_job(
+        video_job,
+        autobotvideo,
+        CREATIVE_PROMPT_MARKERS["video"],
     )
     jobs["health"] = lambda: health.run_health_check(
         autobot.http,

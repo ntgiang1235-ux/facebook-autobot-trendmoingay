@@ -10,6 +10,9 @@ class PublicationContext:
     scheduled_for: str | None
     strategy_mode: str
     strategy_version: int | None
+    hook_type: str = "unknown"
+    style_type: str = "unknown"
+    cta_type: str = "none"
 
 
 _CURRENT: ContextVar[PublicationContext | None] = ContextVar(

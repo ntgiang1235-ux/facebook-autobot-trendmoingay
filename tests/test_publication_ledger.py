@@ -15,6 +15,9 @@ class PublicationLedgerTests(unittest.TestCase):
             scheduled_for="2026-08-31T01:30:00+00:00",
             strategy_mode="exploit",
             strategy_version=12,
+            hook_type="contrast",
+            style_type="explanatory",
+            cta_type="opinion_question",
         )
         now = datetime(2026, 8, 31, 1, 38, tzinfo=timezone.utc)
 
@@ -38,6 +41,9 @@ class PublicationLedgerTests(unittest.TestCase):
         self.assertEqual(candidate.content_text, "Bản tin sáng nay")
         self.assertEqual(candidate.source_url, "https://example.com/story")
         self.assertEqual(candidate.format_type, "text")
+        self.assertEqual(candidate.hook_type, "contrast")
+        self.assertEqual(candidate.style_type, "explanatory")
+        self.assertEqual(candidate.cta_type, "opinion_question")
         self.assertTrue(candidate.topic_key.startswith("post:"))
         kwargs = record.call_args.kwargs
         self.assertEqual(kwargs["run_key"], "dispatch-9")
@@ -62,6 +68,10 @@ class PublicationLedgerTests(unittest.TestCase):
                 now=datetime(2026, 8, 31, 2, 0, tzinfo=timezone.utc),
             )
 
+        candidate = record.call_args.args[1]
+        self.assertEqual(candidate.hook_type, "unknown")
+        self.assertEqual(candidate.style_type, "unknown")
+        self.assertEqual(candidate.cta_type, "none")
         kwargs = record.call_args.kwargs
         self.assertIsNone(kwargs["run_key"])
         self.assertIsNone(kwargs["scheduled_for"])
