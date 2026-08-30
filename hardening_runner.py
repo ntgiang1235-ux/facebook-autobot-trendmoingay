@@ -112,6 +112,8 @@ def _adaptive_before_publish(action: str):
 
 
 def _adaptive_publish_callback(action: str):
+    """Legacy publication callback retained for backward compatibility."""
+
     def callback(endpoint: str, request_data: dict, response: dict) -> None:
         publication_ledger.record_published_content(
             db.execute,
@@ -119,6 +121,20 @@ def _adaptive_publish_callback(action: str):
             endpoint=endpoint,
             request_data=request_data,
             response=response,
+        )
+
+    return callback
+
+
+def _adaptive_publish_intelligence_callback(action: str):
+    def callback(endpoint: str, request_data: dict, response: dict, intelligence: object) -> None:
+        publication_ledger.record_published_content(
+            db.execute,
+            action=action,
+            endpoint=endpoint,
+            request_data=request_data,
+            response=response,
+            intelligence=intelligence,
         )
 
     return callback
@@ -146,8 +162,8 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=True,
-            on_published=_adaptive_publish_callback("post"),
             before_publish=_adaptive_before_publish("post"),
+            on_published_intelligence=_adaptive_publish_intelligence_callback("post"),
         ),
         "reply": adapt_reply_job(autobot.auto_reply_job, autobot),
         "finance": adapt_publish_job(
@@ -155,16 +171,16 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
-            on_published=_adaptive_publish_callback("finance"),
             before_publish=_adaptive_before_publish("finance"),
+            on_published_intelligence=_adaptive_publish_intelligence_callback("finance"),
         ),
         "philosophy": adapt_publish_job(
             autobot.philosophy_post_job,
             autobot,
             lambda endpoint: endpoint == "me/feed",
             allow_skip=False,
-            on_published=_adaptive_publish_callback("philosophy"),
             before_publish=_adaptive_before_publish("philosophy"),
+            on_published_intelligence=_adaptive_publish_intelligence_callback("philosophy"),
         ),
         "summary": adapt_publish_job(
             autobot.daily_summary_job,
@@ -182,16 +198,16 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
             autobot,
             _runner_primary_publish,
             allow_skip=False,
-            on_published=_adaptive_publish_callback("recipe"),
             before_publish=_adaptive_before_publish("recipe"),
+            on_published_intelligence=_adaptive_publish_intelligence_callback("recipe"),
         ),
         "fun": adapt_publish_job(
             runner.fun_job,
             autobot,
             _runner_primary_publish,
             allow_skip=False,
-            on_published=_adaptive_publish_callback("fun"),
             before_publish=_adaptive_before_publish("fun"),
+            on_published_intelligence=_adaptive_publish_intelligence_callback("fun"),
         ),
     }
 
