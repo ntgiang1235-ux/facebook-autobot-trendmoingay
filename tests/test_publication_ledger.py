@@ -48,6 +48,26 @@ class PublicationLedgerTests(unittest.TestCase):
         self.assertEqual(kwargs["status"], "published")
         self.assertEqual(kwargs["published_at"], now.isoformat())
 
+    def test_publish_without_dispatch_context_is_marked_manual_for_learning_isolation(self):
+        from app.publication_ledger import record_published_content
+
+        with patch("app.publication_ledger.content_repository.record_candidate", return_value=6) as record:
+            record_published_content(
+                Mock(),
+                action="finance",
+                endpoint="me/feed",
+                request_data={"message": "Bản tin tài chính thủ công"},
+                response={"id": "manual-finance-1"},
+                context=None,
+                now=datetime(2026, 8, 31, 2, 0, tzinfo=timezone.utc),
+            )
+
+        kwargs = record.call_args.kwargs
+        self.assertIsNone(kwargs["run_key"])
+        self.assertIsNone(kwargs["scheduled_for"])
+        self.assertEqual(kwargs["strategy_mode"], "manual")
+        self.assertIsNone(kwargs["strategy_version"])
+
     def test_photo_publish_does_not_treat_media_url_as_article_source(self):
         from app.publication_ledger import record_published_content
 
