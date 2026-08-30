@@ -55,9 +55,21 @@ def prepare_publishable_candidate(
         if quality.action == "publish":
             classified = replace(
                 current,
-                hook_type=quality.hook_type,
-                style_type=quality.style_type,
-                cta_type=quality.cta_type,
+                hook_type=(
+                    quality.hook_type
+                    if quality.hook_type != "unknown"
+                    else current.hook_type
+                ),
+                style_type=(
+                    quality.style_type
+                    if quality.style_type != "unknown"
+                    else current.style_type
+                ),
+                cta_type=(
+                    quality.cta_type
+                    if quality.cta_type != "none"
+                    else current.cta_type
+                ),
             )
             return PipelineResult(
                 status="ready",
