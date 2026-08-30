@@ -151,6 +151,32 @@ class AdaptiveFeedbackLoopTests(unittest.TestCase):
         self.assertIn("14-day", version_row[1])
         self.assertEqual(version_row[2], 1)
 
+    def test_second_refresh_same_vietnam_day_does_not_compound_weights(self):
+        from app.feedback_loop import refresh_strategy
+
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
+        for index in range(5):
+            published = now - timedelta(days=index + 1)
+            self._post("finance", 80, published, index=index)
+            self._post("post", 40, published, index=index)
+            self._post("video", 60, published, index=index)
+        self.conn.commit()
+
+        first = refresh_strategy(self.execute, now=now)
+        first_weights = self.execute(
+            "SELECT value, current_weight FROM strategy_stats WHERE dimension='category' ORDER BY value"
+        )
+        second = refresh_strategy(self.execute, now=now + timedelta(hours=2))
+        second_weights = self.execute(
+            "SELECT value, current_weight FROM strategy_stats WHERE dimension='category' ORDER BY value"
+        )
+
+        self.assertEqual(first.version_id, 1)
+        self.assertEqual(second.version_id, 1)
+        self.assertEqual(second.updated_stat_count, 0)
+        self.assertEqual(first_weights, second_weights)
+        self.assertEqual(self.execute("SELECT COUNT(*) FROM strategy_versions"), [(1,)])
+
     def test_persistently_weak_category_is_suspended_and_gets_retest_date(self):
         from app.feedback_loop import refresh_strategy
 
