@@ -37,6 +37,8 @@ def record_published_content(
 
     Only explicit publication metadata is stored. Legacy jobs that do not expose
     hook/style/CTA metadata retain the model defaults rather than inventing values.
+    Publishes outside dispatcher context are marked ``manual`` so later learning
+    can exclude them while metrics/reporting may still observe their performance.
     """
     post_id = response.get("post_id") or response.get("id")
     if not post_id:
@@ -91,8 +93,10 @@ def record_published_content(
         ),
         published_at=_published_at(now),
         strategy_mode=(
-            active_context.strategy_mode if active_context is not None else "baseline"
+            active_context.strategy_mode if active_context is not None else "manual"
         ),
+        quality_score=None,
+        duplicate_score=None,
         strategy_version=(
             active_context.strategy_version if active_context is not None else None
         ),
