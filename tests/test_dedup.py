@@ -1,10 +1,10 @@
 import unittest
 
+from app.content_models import ContentCandidate, RecentContent
+
 
 class ContentModelTests(unittest.TestCase):
     def test_content_candidate_keeps_strategy_metadata(self):
-        from app.content_models import ContentCandidate
-
         item = ContentCandidate(
             category="finance",
             topic_key="gold-price",
@@ -24,6 +24,115 @@ class ContentModelTests(unittest.TestCase):
         self.assertEqual(item.style_type, "explanatory")
         self.assertEqual(item.cta_type, "opinion_question")
         self.assertEqual(item.format_type, "text")
+
+
+class LocalDedupTests(unittest.TestCase):
+    def make_recent(
+        self,
+        *,
+        topic_key="different-topic",
+        topic_text="Một chủ đề khác",
+        source_url="https://example.test/old",
+    ):
+        return RecentContent(
+            id=1,
+            category="finance",
+            topic_key=topic_key,
+            topic_text=topic_text,
+            content_text="Nội dung cũ",
+            source_url=source_url,
+            published_at="2026-08-29T08:00:00+00:00",
+        )
+
+    def make_candidate(
+        self,
+        *,
+        topic_key="gold-price-new",
+        topic_text="Giá vàng hôm nay tiếp tục tăng mạnh",
+        source_url="https://example.test/new",
+    ):
+        return ContentCandidate(
+            category="finance",
+            topic_key=topic_key,
+            topic_text=topic_text,
+            content_text="Nội dung mới",
+            source_url=source_url,
+        )
+
+    def test_normalize_text_handles_case_punctuation_and_whitespace(self):
+        from app.dedup import normalize_text
+
+        self.assertEqual(normalize_text("  Giá VÀNG!!!\nHôm nay? "), "giá vàng hôm nay")
+
+    def test_lexical_similarity_distinguishes_related_and_unrelated_topics(self):
+        from app.dedup import lexical_similarity
+
+        similar = lexical_similarity(
+            "Giá vàng hôm nay tiếp tục tăng mạnh",
+            "Giá vàng hôm nay tăng mạnh",
+        )
+        unrelated = lexical_similarity(
+            "Giá vàng hôm nay tiếp tục tăng mạnh",
+            "Đội tuyển bóng đá chuẩn bị trận đấu",
+        )
+
+        self.assertGreaterEqual(similar, 0.80)
+        self.assertLess(unrelated, 0.80)
+
+    def test_category_specific_anti_repeat_windows(self):
+        from app.dedup import anti_repeat_days
+
+        self.assertEqual(anti_repeat_days("news"), 7)
+        self.assertEqual(anti_repeat_days("finance"), 14)
+        self.assertEqual(anti_repeat_days("fun"), 14)
+        self.assertEqual(anti_repeat_days("recipe"), 30)
+        self.assertEqual(anti_repeat_days("philosophy"), 30)
+        self.assertEqual(anti_repeat_days("video"), 30)
+
+    def test_same_source_url_is_exact_duplicate(self):
+        from app.dedup import check_local_duplicate
+
+        candidate = self.make_candidate(source_url="https://example.test/same")
+        recent = [self.make_recent(source_url="https://example.test/same")]
+
+        decision = check_local_duplicate(candidate, recent)
+
+        self.assertIsNotNone(decision)
+        self.assertTrue(decision.duplicate)
+        self.assertEqual(decision.layer, "exact")
+        self.assertEqual(decision.score, 1.0)
+
+    def test_same_topic_key_is_exact_duplicate(self):
+        from app.dedup import check_local_duplicate
+
+        candidate = self.make_candidate(topic_key="gold-price")
+        recent = [self.make_recent(topic_key="gold-price")]
+
+        decision = check_local_duplicate(candidate, recent)
+
+        self.assertIsNotNone(decision)
+        self.assertTrue(decision.duplicate)
+        self.assertEqual(decision.layer, "exact")
+
+    def test_similar_topic_text_is_lexical_duplicate(self):
+        from app.dedup import check_local_duplicate
+
+        candidate = self.make_candidate()
+        recent = [self.make_recent(topic_text="Giá vàng hôm nay tăng mạnh")]
+
+        decision = check_local_duplicate(candidate, recent)
+
+        self.assertIsNotNone(decision)
+        self.assertTrue(decision.duplicate)
+        self.assertEqual(decision.layer, "lexical")
+        self.assertGreaterEqual(decision.score, 0.80)
+
+    def test_unrelated_recent_content_is_inconclusive_locally(self):
+        from app.dedup import check_local_duplicate
+
+        decision = check_local_duplicate(self.make_candidate(), [self.make_recent()])
+
+        self.assertIsNone(decision)
 
 
 if __name__ == "__main__":
