@@ -35,10 +35,10 @@ def record_published_content(
 ) -> int | None:
     """Persist one confirmed Facebook publish into the canonical content ledger.
 
-    Only explicit publication metadata is stored. Legacy jobs that do not expose
-    hook/style/CTA metadata retain the model defaults rather than inventing values.
-    Publishes outside dispatcher context are marked ``manual`` so later learning
-    can exclude them while metrics/reporting may still observe their performance.
+    Only explicit publication metadata is stored. Adaptive dispatcher publishes
+    preserve the selected hook/style/CTA values so later learning can score the
+    actual treatment that was used. Publishes outside dispatcher context are
+    marked ``manual`` and retain neutral creative defaults.
     """
     post_id = response.get("post_id") or response.get("id")
     if not post_id:
@@ -78,6 +78,21 @@ def record_published_content(
         content_text=content_text,
         source_url=explicit_source,
         source_title=source_title,
+        hook_type=(
+            getattr(active_context, "hook_type", "unknown")
+            if active_context is not None
+            else "unknown"
+        ),
+        style_type=(
+            getattr(active_context, "style_type", "unknown")
+            if active_context is not None
+            else "unknown"
+        ),
+        cta_type=(
+            getattr(active_context, "cta_type", "none")
+            if active_context is not None
+            else "none"
+        ),
         format_type=resolved_format,
     )
 
