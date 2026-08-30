@@ -17,12 +17,14 @@ def adapt_publish_job(
     primary_predicate: Callable[[str], bool],
     *,
     allow_skip: bool = False,
+    on_published: Callable[[str, dict], None] | None = None,
 ) -> Callable[[], JobOutcome]:
     """Turn a legacy publish job's print-and-return behavior into an explicit outcome.
 
     Only failures of the primary Facebook publish are fatal. Optional follow-up
     operations such as seed comments remain best-effort after the primary post
-    has succeeded.
+    has succeeded. When supplied, ``on_published`` receives metadata for a
+    successful primary publish and its failures remain fatal for ledger consistency.
     """
 
     def adapted() -> JobOutcome:
@@ -41,6 +43,8 @@ def adapt_publish_job(
                 if _facebook_publish_succeeded(code, payload):
                     primary_success = True
                     primary_failure = None
+                    if on_published is not None:
+                        on_published(endpoint, payload)
                 else:
                     primary_failure = (endpoint, code, payload)
             return code, payload
