@@ -1,10 +1,6 @@
-import inspect
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
-
-import autobot
-import runner
 
 
 class StylePromptWiringTests(unittest.TestCase):
@@ -26,18 +22,38 @@ class StylePromptWiringTests(unittest.TestCase):
 
         self.assertIsNone(current_style_bundle())
 
-    def test_only_adaptive_text_photo_generation_jobs_use_style_prompt_helper(self):
-        for fn in (
-            autobot.single_post_job,
-            autobot.financial_post_job,
-            autobot.philosophy_post_job,
-            runner.fun_job,
-            runner.recipe_job,
-        ):
-            self.assertIn("adaptive_prompt(prompt)", inspect.getsource(fn), fn.__name__)
+    def test_prompt_adapter_styles_only_primary_content_generation_call(self):
+        from app.style_prompt_adapter import run_with_style
+        from app.style_strategy import StyleBundle
 
-        self.assertNotIn("adaptive_prompt", inspect.getsource(autobot.daily_summary_job))
-        self.assertNotIn("adaptive_prompt(dish_prompt)", inspect.getsource(runner.recipe_job))
+        class FakeModule:
+            def __init__(self):
+                self.prompts = []
+
+            def call_gemini(self, prompt, timeout=30):
+                self.prompts.append(prompt)
+                return "ok"
+
+        bundle = StyleBundle("question", "witty", "opinion_question", "exploit")
+
+        recipe = FakeModule()
+
+        def recipe_job():
+            recipe.call_gemini("dish")
+            recipe.call_gemini("content")
+            recipe.call_gemini("seed")
+
+        run_with_style("recipe", recipe, recipe_job, bundle)
+        self.assertNotIn("hook_type=", recipe.prompts[0])
+        self.assertIn("hook_type=question", recipe.prompts[1])
+        self.assertNotIn("hook_type=", recipe.prompts[2])
+
+        post = FakeModule()
+        run_with_style("post", post, lambda: post.call_gemini("content"), bundle)
+        self.assertIn("hook_type=question", post.prompts[0])
+
+        post.call_gemini("outside")
+        self.assertEqual(post.prompts[-1], "outside")
 
     def test_prepublish_candidate_carries_selected_style_bundle(self):
         from app import prepublish_guard
