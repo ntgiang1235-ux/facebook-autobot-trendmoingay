@@ -1,3 +1,5 @@
+import json
+import math
 import re
 import unicodedata
 from difflib import SequenceMatcher
@@ -14,6 +16,7 @@ CATEGORY_WINDOWS = {
     "philosophy": 30,
     "video": 30,
 }
+SEMANTIC_RECENT_LIMIT = 20
 
 
 def normalize_text(text: str) -> str:
@@ -64,3 +67,75 @@ def check_local_duplicate(
         return DuplicateDecision(True, best_score, "lexical", "similar topic text")
 
     return None
+
+
+def _parse_semantic_json(raw: str) -> dict:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("semantic response must be a JSON object")
+    return parsed
+
+
+def check_semantic_duplicate(
+    candidate: ContentCandidate,
+    recent: list[RecentContent],
+    gemini_fn,
+    limit: int = SEMANTIC_RECENT_LIMIT,
+) -> DuplicateDecision:
+    """Run a bounded semantic check after exact/lexical checks are inconclusive."""
+    try:
+        requested_limit = int(limit)
+    except (TypeError, ValueError):
+        requested_limit = SEMANTIC_RECENT_LIMIT
+    bounded_limit = min(max(requested_limit, 0), SEMANTIC_RECENT_LIMIT)
+    bounded_recent = recent[:bounded_limit]
+
+    recent_lines = "\n".join(
+        f"- topic_key={item.topic_key}; topic={item.topic_text}"
+        for item in bounded_recent
+    )
+    prompt = (
+        "Compare the candidate topic with the recent topics and decide whether "
+        "they describe the same underlying event or substantially the same topic.\n"
+        "Return JSON only with exactly these keys: duplicate (boolean), "
+        "similarity (number from 0 to 1), reason (short string).\n"
+        f"Candidate topic_key={candidate.topic_key}; topic={candidate.topic_text}\n"
+        "Recent topics:\n"
+        f"{recent_lines or '- none'}"
+    )
+
+    try:
+        raw = gemini_fn(prompt)
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("empty semantic response")
+        data = _parse_semantic_json(raw)
+
+        duplicate = data.get("duplicate")
+        if not isinstance(duplicate, bool):
+            raise ValueError("duplicate must be boolean")
+
+        similarity = float(data.get("similarity"))
+        if not math.isfinite(similarity):
+            raise ValueError("similarity must be finite")
+        similarity = min(1.0, max(0.0, similarity))
+
+        reason = data.get("reason")
+        if not isinstance(reason, str):
+            raise ValueError("reason must be string")
+
+        return DuplicateDecision(duplicate, similarity, "semantic", reason.strip())
+    except Exception:
+        return DuplicateDecision(
+            False,
+            0.0,
+            "semantic_unavailable",
+            "semantic check unavailable",
+        )
