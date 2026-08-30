@@ -63,6 +63,10 @@ class StyleProductionWiringTests(unittest.TestCase):
         ), patch.object(
             autobot, "validate_runtime_config"
         ), patch.object(
+            hardening_runner.content_repository,
+            "recent_content",
+            return_value=[],
+        ), patch.object(
             hardening_runner.style_strategy,
             "choose_style_bundle",
             return_value=bundle,
