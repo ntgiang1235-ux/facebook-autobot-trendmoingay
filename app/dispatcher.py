@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from app.job_contract import JobOutcome, skipped, success
 from app.plan_repository import claim_due_slot, finish_slot
+from app.publication_context import PublicationContext, use_publication_context
 
 
 VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -62,8 +63,16 @@ def dispatch_due(
         _finish_failure_best_effort(execute_fn, slot, run_key, current, str(error))
         raise error
 
+    context = PublicationContext(
+        run_key=run_key,
+        category=slot.category,
+        scheduled_for=slot.planned_for,
+        strategy_mode=slot.strategy_mode,
+        strategy_version=slot.strategy_version,
+    )
     try:
-        result = job_fn()
+        with use_publication_context(context):
+            result = job_fn()
     except Exception as exc:
         _finish_failure_best_effort(execute_fn, slot, run_key, current, str(exc))
         raise
