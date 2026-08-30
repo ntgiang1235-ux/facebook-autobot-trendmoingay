@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.job_contract import skipped, success
@@ -64,7 +65,14 @@ class DispatcherTests(unittest.TestCase):
         slot = claimed_slot("post")
         with patch("app.dispatcher.claim_due_slot", return_value=slot), patch(
             "app.dispatcher.finish_slot"
-        ) as finish:
+        ) as finish, patch(
+            "app.dispatcher.select_creative_profile",
+            return_value=SimpleNamespace(
+                hook_type="question",
+                style_type="conversational",
+                cta_type="opinion_question",
+            ),
+        ):
             outcome = dispatch_due(execute, {"post": job}, now=self.now, run_key="run-1")
 
         self.assertEqual(outcome.status, "success")
@@ -82,6 +90,11 @@ class DispatcherTests(unittest.TestCase):
         execute = Mock()
         slot = claimed_slot("finance")
         observed = []
+        profile = SimpleNamespace(
+            hook_type="contrast",
+            style_type="explanatory",
+            cta_type="choose_side",
+        )
 
         def job():
             observed.append(current_publication_context())
@@ -89,7 +102,9 @@ class DispatcherTests(unittest.TestCase):
 
         with patch("app.dispatcher.claim_due_slot", return_value=slot), patch(
             "app.dispatcher.finish_slot"
-        ):
+        ), patch(
+            "app.dispatcher.select_creative_profile", return_value=profile
+        ) as select_profile:
             dispatch_due(execute, {"finance": job}, now=self.now, run_key="run-42")
 
         self.assertEqual(len(observed), 1)
@@ -99,7 +114,35 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(context.scheduled_for, slot.planned_for)
         self.assertEqual(context.strategy_mode, "exploit")
         self.assertEqual(context.strategy_version, 12)
+        self.assertEqual(context.hook_type, "contrast")
+        self.assertEqual(context.style_type, "explanatory")
+        self.assertEqual(context.cta_type, "choose_side")
+        select_profile.assert_called_once_with(
+            execute,
+            run_key="run-42",
+            category="finance",
+            strategy_version=12,
+        )
         self.assertIsNone(current_publication_context())
+
+    def test_creative_selector_failure_marks_slot_failed_before_business_job(self):
+        from app.dispatcher import dispatch_due
+
+        execute = Mock()
+        job = Mock()
+        slot = claimed_slot("post")
+        with patch("app.dispatcher.claim_due_slot", return_value=slot), patch(
+            "app.dispatcher.finish_slot"
+        ) as finish, patch(
+            "app.dispatcher.select_creative_profile",
+            side_effect=RuntimeError("creative selector unavailable"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "creative selector unavailable"):
+                dispatch_due(execute, {"post": job}, now=self.now, run_key="run-1")
+
+        job.assert_not_called()
+        self.assertEqual(finish.call_args.kwargs["status"], "failed")
+        self.assertIn("creative selector unavailable", finish.call_args.kwargs["detail"])
 
     def test_business_skip_marks_slot_skipped_not_published(self):
         from app.dispatcher import dispatch_due
@@ -108,7 +151,14 @@ class DispatcherTests(unittest.TestCase):
         slot = claimed_slot("post")
         with patch("app.dispatcher.claim_due_slot", return_value=slot), patch(
             "app.dispatcher.finish_slot"
-        ) as finish:
+        ) as finish, patch(
+            "app.dispatcher.select_creative_profile",
+            return_value=SimpleNamespace(
+                hook_type="question",
+                style_type="conversational",
+                cta_type="opinion_question",
+            ),
+        ):
             outcome = dispatch_due(
                 execute,
                 {"post": lambda: skipped("duplicate")},
@@ -130,7 +180,14 @@ class DispatcherTests(unittest.TestCase):
         slot = claimed_slot("post")
         with patch("app.dispatcher.claim_due_slot", return_value=slot), patch(
             "app.dispatcher.finish_slot"
-        ) as finish:
+        ) as finish, patch(
+            "app.dispatcher.select_creative_profile",
+            return_value=SimpleNamespace(
+                hook_type="question",
+                style_type="conversational",
+                cta_type="opinion_question",
+            ),
+        ):
             with self.assertRaisesRegex(RuntimeError, "facebook down"):
                 dispatch_due(execute, {"post": fail}, now=self.now, run_key="run-1")
 
