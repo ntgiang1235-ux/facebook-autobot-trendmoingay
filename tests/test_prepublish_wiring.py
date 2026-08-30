@@ -4,6 +4,10 @@ from unittest.mock import Mock, patch
 import hardening_runner
 from app.job_contract import success
 from app.prepublish_guard import PrePublishDecision
+from app.style_strategy import StyleBundle
+
+
+TEST_BUNDLE = StyleBundle("question", "conversational", "no_cta", "exploit")
 
 
 class PrePublishWiringTests(unittest.TestCase):
@@ -57,6 +61,8 @@ class PrePublishWiringTests(unittest.TestCase):
                 hardening_runner.content_repository, "recent_content", return_value=[]
             ), patch.object(
                 hardening_runner.prepublish_guard, "evaluate_request", return_value=rejected
+            ), patch.object(
+                hardening_runner.style_strategy, "choose_style_bundle", return_value=TEST_BUNDLE
             ), patch.object(hardening_runner.autobot, "validate_runtime_config"):
                 jobs = hardening_runner.resolve_jobs()
                 outcome = jobs["post"]()
