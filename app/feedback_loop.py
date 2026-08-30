@@ -106,14 +106,10 @@ def _experiment_projection(
 
 
 def _style_registry_statuses(execute_fn) -> dict[tuple[str, str], str]:
-    try:
-        rows = execute_fn(
-            "SELECT dimension, value, status FROM style_registry",
-            (),
-        )
-    except Exception:
-        return {}
-
+    rows = execute_fn(
+        "SELECT dimension, value, status FROM style_registry",
+        (),
+    )
     statuses: dict[tuple[str, str], str] = {}
     for registry_dimension, value, status in rows:
         dimension = _EXPERIMENT_TO_DIMENSION.get(str(registry_dimension))
