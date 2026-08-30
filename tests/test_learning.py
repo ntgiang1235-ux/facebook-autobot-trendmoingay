@@ -92,5 +92,89 @@ class LearningAggregationTests(unittest.TestCase):
         self.assertEqual(stat.success_rate, 0.0)
 
 
+class WeightUpdateTests(unittest.TestCase):
+    def test_four_mature_samples_are_insufficient_for_weight_change(self):
+        from app.learning import propose_weight
+
+        proposal = propose_weight(
+            current_weight=0.25,
+            score=90.0,
+            peer_scores=[40.0, 50.0, 60.0, 70.0],
+            mature_samples=4,
+        )
+
+        self.assertEqual(proposal.status, "insufficient_data")
+        self.assertEqual(proposal.proposed_weight, 0.25)
+
+    def test_strong_score_increases_but_never_more_than_twenty_percent(self):
+        from app.learning import propose_weight
+
+        proposal = propose_weight(
+            current_weight=0.25,
+            score=90.0,
+            peer_scores=[40.0, 50.0, 60.0, 70.0, 80.0],
+            mature_samples=5,
+        )
+
+        self.assertGreater(proposal.proposed_weight, 0.25)
+        self.assertLessEqual(proposal.proposed_weight, 0.30)
+        self.assertEqual(proposal.status, "adjusted")
+
+    def test_weak_score_decreases_but_never_more_than_twenty_percent(self):
+        from app.learning import propose_weight
+
+        proposal = propose_weight(
+            current_weight=0.25,
+            score=20.0,
+            peer_scores=[30.0, 40.0, 50.0, 60.0, 70.0],
+            mature_samples=5,
+        )
+
+        self.assertLess(proposal.proposed_weight, 0.25)
+        self.assertGreaterEqual(proposal.proposed_weight, 0.20)
+        self.assertEqual(proposal.status, "adjusted")
+
+    def test_equal_peer_scores_keep_weight_stable(self):
+        from app.learning import propose_weight
+
+        proposal = propose_weight(
+            current_weight=0.40,
+            score=50.0,
+            peer_scores=[50.0, 50.0, 50.0, 50.0, 50.0],
+            mature_samples=5,
+        )
+
+        self.assertEqual(proposal.proposed_weight, 0.40)
+        self.assertEqual(proposal.status, "stable")
+
+    def test_bounded_normalization_sums_to_one_without_breaking_daily_caps(self):
+        from app.learning import normalize_bounded_weights
+
+        current = {"a": 0.50, "b": 0.30, "c": 0.20}
+        proposed = {"a": 0.60, "b": 0.24, "c": 0.18}
+
+        normalized = normalize_bounded_weights(current, proposed)
+
+        self.assertAlmostEqual(sum(normalized.values()), 1.0)
+        for key, current_weight in current.items():
+            self.assertGreaterEqual(normalized[key], current_weight * 0.8 - 1e-9)
+            self.assertLessEqual(normalized[key], current_weight * 1.2 + 1e-9)
+            self.assertGreater(normalized[key], 0.0)
+
+    def test_bounded_normalization_excludes_inactive_values(self):
+        from app.learning import normalize_bounded_weights
+
+        current = {"active": 0.70, "sleeping": 0.30}
+        proposed = {"active": 0.84, "sleeping": 0.24}
+
+        normalized = normalize_bounded_weights(
+            current,
+            proposed,
+            active_values={"active"},
+        )
+
+        self.assertEqual(normalized, {"active": 1.0, "sleeping": 0.0})
+
+
 if __name__ == "__main__":
     unittest.main()
