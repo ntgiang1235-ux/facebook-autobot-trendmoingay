@@ -50,6 +50,8 @@ class FeedbackIdempotencyTests(unittest.TestCase):
                 return [(7, "2026-08-31T16:30:00+00:00")]
             if "MAX(version_id)" in query:
                 return [(7,)]
+            if "FROM style_registry" in query:
+                return []
             raise AssertionError(f"unexpected SQL: {query}")
 
         config = AdaptiveConfig(
