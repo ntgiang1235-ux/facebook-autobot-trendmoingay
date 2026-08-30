@@ -77,6 +77,7 @@ def ensure_schema() -> None:
             style_type TEXT NOT NULL DEFAULT 'unknown',
             cta_type TEXT NOT NULL DEFAULT 'none',
             format_type TEXT NOT NULL DEFAULT 'text',
+            style_experiment_key TEXT,
             scheduled_for TEXT,
             published_at TEXT,
             strategy_mode TEXT NOT NULL DEFAULT 'baseline',
@@ -89,6 +90,9 @@ def ensure_schema() -> None:
         )
         """
     )
+    content_columns = {row[1] for row in execute("PRAGMA table_info(content_posts)")}
+    if "style_experiment_key" not in content_columns:
+        execute("ALTER TABLE content_posts ADD COLUMN style_experiment_key TEXT")
     execute(
         "CREATE INDEX IF NOT EXISTS idx_content_posts_category_time "
         "ON content_posts(category, published_at)"
