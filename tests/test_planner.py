@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.strategy_models import AdaptiveConfig, StrategyStat
 
@@ -14,9 +15,10 @@ def stat(
     status: str = "active",
     last_used_at: str | None = None,
     retest_after: str | None = None,
+    dimension: str = "category",
 ) -> StrategyStat:
     return StrategyStat(
-        dimension="category",
+        dimension=dimension,
         value=value,
         sample_count=samples,
         weighted_score_14d=score,
@@ -29,6 +31,25 @@ def stat(
         retest_after=retest_after,
         updated_at="2026-08-30T00:00:00+00:00",
     )
+
+
+def ready_categories() -> list[StrategyStat]:
+    return [
+        stat("post", weight=0.30),
+        stat("video", weight=0.25),
+        stat("fun", weight=0.15),
+        stat("finance", weight=0.10),
+        stat("philosophy", weight=0.10),
+        stat("recipe", weight=0.10),
+    ]
+
+
+def local_times(slots) -> list[str]:
+    vietnam = ZoneInfo("Asia/Ho_Chi_Minh")
+    return [
+        datetime.fromisoformat(slot.planned_for).astimezone(vietnam).strftime("%H:%M")
+        for slot in slots
+    ]
 
 
 class DailyPlannerTests(unittest.TestCase):
@@ -149,6 +170,92 @@ class DailyPlannerTests(unittest.TestCase):
 
         self.assertEqual(len(slots), 12)
         self.assertTrue(all(slot.strategy_mode == "baseline" for slot in slots))
+
+    def test_insufficient_time_learning_keeps_baseline_time_buckets(self):
+        from app.planner import build_daily_plan
+
+        config = AdaptiveConfig(baseline_daily_volume=12, current_strategy_version=12)
+        time_stats = [
+            stat("15:30", dimension="time_bucket", samples=2, weight=0.90),
+            stat("19:30", dimension="time_bucket", samples=2, weight=0.10),
+        ]
+
+        slots = build_daily_plan(
+            self.plan_date,
+            config,
+            ready_categories(),
+            time_stats,
+            now=self.now,
+        )
+
+        self.assertEqual(
+            local_times(slots),
+            [hhmm for hhmm, _ in (
+                ("08:30", "post"), ("09:00", "philosophy"), ("09:30", "video"),
+                ("11:00", "finance"), ("11:30", "post"), ("12:30", "video"),
+                ("13:30", "fun"), ("14:30", "post"), ("16:00", "recipe"),
+                ("17:30", "video"), ("18:30", "post"), ("20:00", "fun"),
+            )],
+        )
+
+    def test_mature_time_learning_can_move_plan_into_winning_nonbaseline_bucket(self):
+        from app.planner import build_daily_plan
+
+        config = AdaptiveConfig(baseline_daily_volume=12, current_strategy_version=13)
+        learned = [
+            ("08:30", 0.10), ("09:00", 0.10), ("09:30", 0.10),
+            ("10:00", 0.10), ("10:30", 0.10), ("11:00", 0.10),
+            ("11:30", 0.10), ("12:00", 0.10), ("12:30", 0.10),
+            ("13:00", 0.10), ("13:30", 0.10), ("15:30", 5.00),
+            ("18:30", 0.10), ("20:00", 0.10),
+        ]
+        time_stats = [
+            stat(value, dimension="time_bucket", samples=8, score=80 if value == "15:30" else 50, weight=weight)
+            for value, weight in learned
+        ]
+
+        slots = build_daily_plan(
+            self.plan_date,
+            config,
+            ready_categories(),
+            time_stats,
+            now=self.now,
+        )
+
+        selected = local_times(slots)
+        self.assertIn("15:30", selected)
+        self.assertEqual(len(selected), len(set(selected)))
+        self.assertTrue(all("08:30" <= value <= "21:00" for value in selected))
+
+    def test_suspended_time_bucket_is_excluded_from_adaptive_schedule(self):
+        from app.planner import build_daily_plan
+
+        config = AdaptiveConfig(baseline_daily_volume=12, current_strategy_version=14)
+        values = [
+            "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
+            "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00",
+            "15:30", "16:00",
+        ]
+        time_stats = [
+            stat(
+                value,
+                dimension="time_bucket",
+                samples=8,
+                weight=10.0 if value == "13:30" else 1.0,
+                status="suspended" if value == "13:30" else "active",
+            )
+            for value in values
+        ]
+
+        slots = build_daily_plan(
+            self.plan_date,
+            config,
+            ready_categories(),
+            time_stats,
+            now=self.now,
+        )
+
+        self.assertNotIn("13:30", local_times(slots))
 
 
 if __name__ == "__main__":
