@@ -1,3 +1,4 @@
+import sqlite3
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock
@@ -53,6 +54,103 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("finance &lt;hot&gt;", message)
         self.assertIn("recipe &amp; food", message)
         self.assertNotIn("finance <hot>", message)
+
+    def test_metric_queries_use_vietnam_calendar_day(self):
+        from app.reporting import _category_ranking, _metric_summary
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                "CREATE TABLE content_posts (facebook_post_id TEXT, category TEXT, published_at TEXT)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE content_metrics (
+                    facebook_post_id TEXT,
+                    score_kind TEXT,
+                    content_score REAL,
+                    reach INTEGER,
+                    impressions INTEGER
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO content_posts VALUES (?, ?, ?)",
+                ("post-1", "finance", "2026-08-30T18:30:00+00:00"),
+            )
+            conn.execute(
+                "INSERT INTO content_metrics VALUES (?, ?, ?, ?, ?)",
+                ("post-1", "final", 81.0, 1000, None),
+            )
+            conn.commit()
+
+            def execute(query, params=()):
+                return conn.execute(query, params).fetchall()
+
+            count, average, warning = _metric_summary(
+                execute, "2026-08-31", "2026-08-31"
+            )
+            top, bottom = _category_ranking(
+                execute, "2026-08-31", "2026-08-31"
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(count, 1)
+        self.assertEqual(average, 81.0)
+        self.assertIsNone(warning)
+        self.assertEqual(top, ("finance", 81.0))
+        self.assertEqual(bottom, ("finance", 81.0))
+
+    def test_metric_warning_detects_partial_exposure_coverage(self):
+        from app.reporting import _metric_summary
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                "CREATE TABLE content_posts (facebook_post_id TEXT, category TEXT, published_at TEXT)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE content_metrics (
+                    facebook_post_id TEXT,
+                    score_kind TEXT,
+                    content_score REAL,
+                    reach INTEGER,
+                    impressions INTEGER
+                )
+                """
+            )
+            for index in range(4):
+                post_id = f"post-{index}"
+                conn.execute(
+                    "INSERT INTO content_posts VALUES (?, ?, ?)",
+                    (post_id, "finance", "2026-08-30T12:00:00+00:00"),
+                )
+                has_exposure = index < 2
+                conn.execute(
+                    "INSERT INTO content_metrics VALUES (?, ?, ?, ?, ?)",
+                    (
+                        post_id,
+                        "final",
+                        60.0 + index,
+                        1000 if has_exposure else None,
+                        1200 if has_exposure else None,
+                    ),
+                )
+            conn.commit()
+
+            def execute(query, params=()):
+                return conn.execute(query, params).fetchall()
+
+            count, _, warning = _metric_summary(
+                execute, "2026-08-30", "2026-08-30"
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(count, 4)
+        self.assertEqual(warning, "reach/impressions chỉ khả dụng một phần")
 
     def test_weekly_report_ranks_strategy_dimensions_and_marks_suspended(self):
         from app.reporting import RankedStat, WeeklyReportData, build_weekly_report
