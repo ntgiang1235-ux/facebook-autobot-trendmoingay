@@ -3,6 +3,9 @@ from collections.abc import Callable
 from app.job_contract import JobOutcome, skipped, success
 
 
+_PREPUBLISH_SKIP_ID = "__prepublish_skipped__"
+
+
 def _facebook_publish_succeeded(code: int, payload: object) -> bool:
     if code != 200:
         return False
@@ -18,37 +21,77 @@ def adapt_publish_job(
     *,
     allow_skip: bool = False,
     on_published: Callable[[str, dict, dict], None] | None = None,
+    before_publish: Callable[[str, dict], object] | None = None,
 ) -> Callable[[], JobOutcome]:
     """Turn a legacy publish job's print-and-return behavior into an explicit outcome.
 
     Only failures of the primary Facebook publish are fatal. Optional follow-up
     operations such as seed comments remain best-effort after the primary post
-    has succeeded. When supplied, ``on_published`` receives the endpoint, a
-    pristine copy of the outbound request data and the successful Facebook
-    response.
+    has succeeded. When supplied, ``before_publish`` can reject or rewrite the
+    outbound primary request before any Facebook network call. ``on_published``
+    receives only a real successful Facebook publish.
 
     Publication metadata is captured inside the Facebook wrapper but the
     callback itself runs only after the legacy job returns. This boundary is
     intentional: some legacy image helpers catch exceptions from a publish call
     and retry as text. A Turso/ledger exception must never be mistaken for a
     Facebook upload exception and trigger a duplicate publish.
+
+    A pre-publish rejection is represented to legacy code as a synthetic 200 so
+    image helpers do not fall back to a second publish. Follow-up Facebook calls
+    and success Telegram messages are suppressed until the legacy job returns;
+    the adapter then reports an explicit skipped outcome.
     """
 
     def adapted() -> JobOutcome:
         original_fb = module.call_fb_api
         original_gemini = module.call_gemini
+        original_delivery = getattr(module, "send_tele", None)
         primary_attempted = False
         primary_success = False
         primary_failure = None
         published_metadata = None
         gemini_failed_before_publish = False
+        prepublish_rejected = None
+
+        def reject_prepublish(detail: str) -> tuple[int, dict]:
+            nonlocal prepublish_rejected
+            prepublish_rejected = detail or "pre-publish check rejected content"
+            return 200, {"id": _PREPUBLISH_SKIP_ID}
 
         def tracked_fb(endpoint, data, files=None):
             nonlocal primary_attempted, primary_success, primary_failure, published_metadata
+
+            # Once the primary request has been rejected, suppress every legacy
+            # follow-up call (seed comments, fallbacks, etc.) until the job exits.
+            if prepublish_rejected is not None:
+                return 200, {"id": _PREPUBLISH_SKIP_ID}
+
             request_data = dict(data) if isinstance(data, dict) else {}
-            code, payload = original_fb(endpoint, data, files=files)
-            if primary_predicate(endpoint):
+            outbound_data = data
+            is_primary = primary_predicate(endpoint)
+
+            if is_primary:
                 primary_attempted = True
+                if before_publish is not None:
+                    try:
+                        decision = before_publish(endpoint, request_data)
+                        publish = getattr(decision, "publish", None)
+                        detail = str(getattr(decision, "detail", "")).strip()
+                        if publish is not True:
+                            if publish is not False:
+                                detail = detail or "pre-publish check returned invalid decision"
+                            return reject_prepublish(detail or "pre-publish check rejected content")
+                        rewritten = getattr(decision, "request_data", None)
+                        if not isinstance(rewritten, dict):
+                            return reject_prepublish("pre-publish check returned invalid request data")
+                        outbound_data = dict(rewritten)
+                        request_data = dict(rewritten)
+                    except Exception as error:
+                        return reject_prepublish(f"pre-publish check failed: {error}")
+
+            code, payload = original_fb(endpoint, outbound_data, files=files)
+            if is_primary:
                 if _facebook_publish_succeeded(code, payload):
                     primary_success = True
                     primary_failure = None
@@ -69,13 +112,25 @@ def adapt_publish_job(
                 gemini_failed_before_publish = True
             return result
 
+        def tracked_delivery(message):
+            if prepublish_rejected is not None:
+                return True
+            return original_delivery(message)
+
         module.call_fb_api = tracked_fb
         module.call_gemini = tracked_gemini
+        if callable(original_delivery):
+            module.send_tele = tracked_delivery
         try:
             job_fn()
         finally:
             module.call_fb_api = original_fb
             module.call_gemini = original_gemini
+            if callable(original_delivery):
+                module.send_tele = original_delivery
+
+        if prepublish_rejected is not None:
+            return skipped(prepublish_rejected)
 
         if gemini_failed_before_publish and not primary_success:
             raise RuntimeError("Gemini returned no content before primary publish")
