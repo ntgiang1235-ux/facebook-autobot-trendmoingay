@@ -4,6 +4,10 @@ from unittest.mock import patch
 import hardening_runner
 import runner
 from app.prepublish_guard import PrePublishDecision
+from app.style_strategy import StyleBundle
+
+
+TEST_BUNDLE = StyleBundle("question", "conversational", "no_cta", "exploit")
 
 
 def allow_publish(endpoint, request_data):
@@ -29,10 +33,12 @@ class RunnerPublishTests(unittest.TestCase):
         ), patch.object(
             runner.autobot, "call_fb_api", return_value=(200, {})
         ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner.style_strategy, "choose_style_bundle", return_value=TEST_BUNDLE
+        ), patch.object(
             hardening_runner, "_adaptive_before_publish", return_value=allow_publish
         ):
             jobs = self._jobs()
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, "primary Facebook publish failed"):
                 jobs["fun"]()
 
     def test_recipe_http_200_without_post_id_is_failure(self):
@@ -41,10 +47,12 @@ class RunnerPublishTests(unittest.TestCase):
         ), patch.object(
             runner.autobot, "call_fb_api", return_value=(200, {})
         ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner.style_strategy, "choose_style_bundle", return_value=TEST_BUNDLE
+        ), patch.object(
             hardening_runner, "_adaptive_before_publish", return_value=allow_publish
         ):
             jobs = self._jobs()
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, "Lỗi đăng bài ẩm thực"):
                 jobs["recipe"]()
 
     def test_recipe_seed_comment_failure_after_publish_is_best_effort(self):
@@ -58,6 +66,8 @@ class RunnerPublishTests(unittest.TestCase):
                 (500, {"error": "seed failed"}),
             ],
         ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner.style_strategy, "choose_style_bundle", return_value=TEST_BUNDLE
+        ), patch.object(
             hardening_runner, "_adaptive_before_publish", return_value=allow_publish
         ), patch.object(
             hardening_runner.publication_ledger,

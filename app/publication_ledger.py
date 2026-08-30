@@ -1,4 +1,5 @@
 import hashlib
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from app import content_repository
@@ -32,13 +33,18 @@ def record_published_content(
     source_url: str | None = None,
     source_title: str | None = None,
     format_type: str | None = None,
+    candidate: ContentCandidate | None = None,
+    quality_score: float | None = None,
+    duplicate_score: float | None = None,
 ) -> int | None:
     """Persist one confirmed Facebook publish into the canonical content ledger.
 
-    Only explicit publication metadata is stored. Legacy jobs that do not expose
-    hook/style/CTA metadata retain the model defaults rather than inventing values.
-    Publishes outside dispatcher context are marked ``manual`` so later learning
-    can exclude them while metrics/reporting may still observe their performance.
+    When the pre-publish intelligence gate supplies its final candidate, preserve
+    the explicit hook/style/CTA and canonical topic key that were actually used.
+    Legacy/manual publishers without such metadata retain model defaults rather
+    than inventing values. Publishes outside dispatcher context are marked
+    ``manual`` so adaptive learning can exclude them while metrics/reporting may
+    still observe their performance.
     """
     post_id = response.get("post_id") or response.get("id")
     if not post_id:
@@ -61,29 +67,51 @@ def record_published_content(
         if active_context is not None and active_context.category
         else action
     )
+
     explicit_source = source_url
+    if explicit_source is None and candidate is not None:
+        explicit_source = candidate.source_url
     if explicit_source is None and endpoint.endswith("/feed"):
         link = safe_request.get("link")
         explicit_source = str(link).strip() if link else None
 
+    resolved_source_title = source_title or (
+        candidate.source_title if candidate is not None else None
+    )
     resolved_format = format_type or (
-        "photo" if endpoint.endswith("/photos") else "text"
-    )
-    resolved_topic = (topic_text or source_title or content_text[:240]).strip()
+        candidate.format_type if candidate is not None else None
+    ) or ("photo" if endpoint.endswith("/photos") else "text")
+    resolved_topic = (
+        topic_text
+        or (candidate.topic_text if candidate is not None else None)
+        or resolved_source_title
+        or content_text[:240]
+    ).strip()
 
-    candidate = ContentCandidate(
-        category=category,
-        topic_key=_topic_key(category, explicit_source, content_text),
-        topic_text=resolved_topic,
-        content_text=content_text,
-        source_url=explicit_source,
-        source_title=source_title,
-        format_type=resolved_format,
-    )
+    if candidate is not None:
+        recorded_candidate = replace(
+            candidate,
+            category=category,
+            topic_text=resolved_topic,
+            content_text=content_text,
+            source_url=explicit_source,
+            source_title=resolved_source_title,
+            format_type=resolved_format,
+        )
+    else:
+        recorded_candidate = ContentCandidate(
+            category=category,
+            topic_key=_topic_key(category, explicit_source, content_text),
+            topic_text=resolved_topic,
+            content_text=content_text,
+            source_url=explicit_source,
+            source_title=resolved_source_title,
+            format_type=resolved_format,
+        )
 
     return content_repository.record_candidate(
         execute_fn,
-        candidate,
+        recorded_candidate,
         run_key=active_context.run_key if active_context is not None else None,
         status="published",
         facebook_post_id=str(post_id),
@@ -95,8 +123,8 @@ def record_published_content(
         strategy_mode=(
             active_context.strategy_mode if active_context is not None else "manual"
         ),
-        quality_score=None,
-        duplicate_score=None,
+        quality_score=quality_score,
+        duplicate_score=duplicate_score,
         strategy_version=(
             active_context.strategy_version if active_context is not None else None
         ),

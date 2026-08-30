@@ -3,6 +3,10 @@ from unittest.mock import patch
 
 import hardening_runner
 from app.prepublish_guard import PrePublishDecision
+from app.style_strategy import StyleBundle
+
+
+TEST_BUNDLE = StyleBundle("question", "conversational", "no_cta", "exploit")
 
 
 def allow_publish(endpoint, request_data):
@@ -34,6 +38,8 @@ class ProductionLedgerWiringTests(unittest.TestCase):
             hardening_runner.autobot,
             "call_fb_api",
             return_value=(200, {"id": "page_post_1"}),
+        ), patch.object(
+            hardening_runner.style_strategy, "choose_style_bundle", return_value=TEST_BUNDLE
         ), patch.object(
             hardening_runner,
             "_adaptive_before_publish",

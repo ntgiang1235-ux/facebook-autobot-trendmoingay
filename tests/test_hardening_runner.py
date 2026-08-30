@@ -7,6 +7,10 @@ from unittest.mock import Mock, patch
 import hardening_runner
 from app.http import VerifiedSession
 from app.job_contract import skipped, success
+from app.style_strategy import StyleBundle
+
+
+TEST_BUNDLE = StyleBundle("question", "conversational", "no_cta", "exploit")
 
 
 class HardeningRunnerTests(unittest.TestCase):
@@ -193,6 +197,8 @@ class HardeningRunnerTests(unittest.TestCase):
     def test_text_jobs_preserve_runtime_config_validation(self):
         with patch.object(hardening_runner.autobot, "validate_runtime_config") as validate, patch.object(
             hardening_runner.autobot, "single_post_job", return_value=None
+        ), patch.object(
+            hardening_runner.style_strategy, "choose_style_bundle", return_value=TEST_BUNDLE
         ):
             jobs = hardening_runner.resolve_jobs()
             outcome = jobs["post"]()

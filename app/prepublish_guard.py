@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.content_models import ContentCandidate, RecentContent
 from app.content_pipeline import prepare_publishable_candidate
 from app.content_repository import content_hash
+from app.style_strategy import StyleBundle
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,12 @@ def _format_type(endpoint: str) -> str:
     return "text"
 
 
-def _candidate_from_request(action: str, endpoint: str, request_data: dict) -> ContentCandidate | None:
+def _candidate_from_request(
+    action: str,
+    endpoint: str,
+    request_data: dict,
+    style_bundle: StyleBundle | None = None,
+) -> ContentCandidate | None:
     message = request_data.get("message")
     if not isinstance(message, str) or not message.strip():
         return None
@@ -42,6 +48,9 @@ def _candidate_from_request(action: str, endpoint: str, request_data: dict) -> C
         topic_text=content,
         content_text=content,
         source_url=source_url,
+        hook_type=style_bundle.hook_type if style_bundle is not None else "unknown",
+        style_type=style_bundle.style_type if style_bundle is not None else "unknown",
+        cta_type=style_bundle.cta_type if style_bundle is not None else "none",
         format_type=_format_type(endpoint),
     )
 
@@ -53,6 +62,9 @@ def _rewrite_candidate(candidate: ContentCandidate, quality, gemini_fn) -> Conte
         "Preserve all factual meaning, source claims, URLs, hashtags, and important numbers. "
         "Do not invent facts. Return only the rewritten post text, no explanation.\n"
         f"Category: {candidate.category}\n"
+        f"Required hook type: {candidate.hook_type}\n"
+        f"Required tone/style: {candidate.style_type}\n"
+        f"Required CTA type: {candidate.cta_type}\n"
         f"Quality issues: {reasons}\n"
         f"Original post:\n{candidate.content_text}"
     )
@@ -76,10 +88,16 @@ def evaluate_request(
     recent: list[RecentContent],
     gemini_fn,
     now: datetime | None = None,
+    style_bundle: StyleBundle | None = None,
 ) -> PrePublishDecision:
     """Run the approved dedup + quality pipeline before a Facebook publish request."""
     del now  # reserved for future deterministic policy windows; recent is already bounded by caller.
-    candidate = _candidate_from_request(action, endpoint, dict(request_data))
+    candidate = _candidate_from_request(
+        action,
+        endpoint,
+        dict(request_data),
+        style_bundle,
+    )
     if candidate is None:
         return PrePublishDecision(
             publish=False,
