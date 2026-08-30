@@ -7,7 +7,7 @@ import autobot
 import autobotvideo
 import metrics_runner
 import runner
-from app import adaptive_jobs, db, dispatcher, health, notifications, scheduler
+from app import adaptive_jobs, db, dispatcher, health, notifications, reporting, scheduler
 from app.http import secure_session_from
 from app.job_adapters import adapt_delivery_job, adapt_publish_job, adapt_reply_job
 from app.job_contract import JobOutcome, run_job, skipped
@@ -26,6 +26,8 @@ VALID_ACTIONS = {
     "metrics",
     "planner",
     "dispatch",
+    "report_daily",
+    "report_weekly",
 }
 ADAPTIVE_CONTENT_ACTIONS = (
     "post",
@@ -135,6 +137,14 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
         db.execute,
     )
     jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
+    jobs["report_daily"] = lambda: reporting.send_daily_report(
+        db.execute,
+        notifications.send_message,
+    )
+    jobs["report_weekly"] = lambda: reporting.send_weekly_report(
+        db.execute,
+        notifications.send_message,
+    )
 
     adaptive_content_jobs = {
         action: jobs[action]
@@ -222,7 +232,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|planner|dispatch>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|planner|dispatch|report_daily|report_weekly>"
         )
     run_action(sys.argv[1])
 
