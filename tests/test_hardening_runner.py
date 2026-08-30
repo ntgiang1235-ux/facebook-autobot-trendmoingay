@@ -104,7 +104,7 @@ class HardeningRunnerTests(unittest.TestCase):
             self.assertIsInstance(hardening_runner.autobotvideo.http, VerifiedSession)
         self.assertEqual(
             set(jobs),
-            {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video", "health"},
+            {"post", "reply", "finance", "philosophy", "summary", "veo", "recipe", "fun", "video", "health", "metrics"},
         )
 
     def test_health_job_uses_shared_dependency_checks(self):
@@ -113,6 +113,14 @@ class HardeningRunnerTests(unittest.TestCase):
             jobs["health"]()
 
         check.assert_called_once()
+
+    def test_metrics_job_routes_to_dedicated_collector(self):
+        with patch.object(hardening_runner.metrics_runner, "collect_due_metrics", return_value={"due": 0, "processed": 0, "failed": 0}) as collect:
+            jobs = hardening_runner.resolve_jobs()
+            result = jobs["metrics"]()
+
+        collect.assert_called_once_with()
+        self.assertEqual(result, {"due": 0, "processed": 0, "failed": 0})
 
     def test_resolve_jobs_wraps_legacy_false_green_actions(self):
         jobs = hardening_runner.resolve_jobs()

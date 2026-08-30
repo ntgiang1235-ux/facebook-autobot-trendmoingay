@@ -132,6 +132,41 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("UNIQUE(dimension, value)", schema)
         self.assertFalse(any("DROP TABLE" in query.upper() for query in queries))
 
+    def test_ensure_schema_creates_content_metrics_additively_and_idempotently(self):
+        calls = []
+
+        def fake_execute(query, params=()):
+            calls.append((query, params))
+            if "PRAGMA table_info(job_runs)" in query:
+                return [
+                    (0, "run_key", "TEXT", 0, None, 1),
+                    (1, "action", "TEXT", 1, None, 0),
+                    (2, "status", "TEXT", 1, None, 0),
+                    (3, "scheduled_for", "TEXT", 0, None, 0),
+                    (4, "delay_minutes", "INTEGER", 0, None, 0),
+                ]
+            return []
+
+        with patch.object(db, "execute", side_effect=fake_execute):
+            db.ensure_schema()
+            db.ensure_schema()
+
+        queries = [query for query, _ in calls]
+        schema = "\n".join(
+            query for query in queries if "CREATE TABLE IF NOT EXISTS content_metrics" in query
+        )
+        self.assertTrue(schema)
+        for field in (
+            "id", "facebook_post_id", "measured_at", "age_hours", "reactions",
+            "comments", "shares", "reach", "impressions", "video_views",
+            "follower_delta", "engagement_rate", "content_score",
+            "metric_capabilities", "score_kind",
+        ):
+            self.assertIn(field, schema)
+        self.assertIn("UNIQUE(facebook_post_id, score_kind)", schema)
+        self.assertTrue(any("idx_content_metrics_score_kind" in query for query in queries))
+        self.assertFalse(any("DROP TABLE" in query.upper() for query in queries))
+
     def test_record_job_upserts_run_status_with_schedule_metadata(self):
         with patch.object(db, "execute", return_value=[]) as execute:
             db.record_job(
