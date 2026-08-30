@@ -36,6 +36,33 @@ class MetricsRepositoryTests(unittest.TestCase):
         self.assertEqual(params[-1], "early")
         self.assertIn('"reach"', params[-2])
 
+    def test_save_snapshot_preserves_missing_basic_metric_as_null(self):
+        from app.metrics_repository import MetricSnapshot, save_snapshot
+
+        calls = []
+        snapshot = MetricSnapshot(
+            facebook_post_id="post-missing",
+            measured_at="2026-08-30T00:00:00+00:00",
+            age_hours=24,
+            reactions=10,
+            comments=2,
+            shares=None,
+            reach=None,
+            impressions=900,
+            video_views=None,
+            follower_delta=None,
+            engagement_rate=None,
+            content_score=50.0,
+            metric_capabilities=frozenset({"reactions", "comments", "impressions"}),
+            score_kind="early",
+        )
+
+        save_snapshot(lambda query, params=(): calls.append((query, params)) or [], snapshot)
+
+        params = calls[0][1]
+        self.assertIsNone(params[5])
+        self.assertNotIn('"shares"', params[-2])
+
     def test_save_snapshot_rejects_unknown_score_kind_before_sql(self):
         from app.metrics_repository import MetricSnapshot, save_snapshot
 
@@ -93,6 +120,26 @@ class MetricsRepositoryTests(unittest.TestCase):
             return [(81.0,), (74.5,), (None,)]
 
         self.assertEqual(recent_final_scores(execute, 10), [81.0, 74.5])
+
+    def test_load_scoring_baseline_uses_only_observed_final_metrics(self):
+        from app.metrics_repository import load_scoring_baseline
+
+        def execute(query, params=()):
+            self.assertIn("score_kind = 'final'", query)
+            self.assertEqual(params, (30,))
+            return [
+                (10, 2, 1, 100, 120, 1),
+                (5, 1, None, None, 80, None),
+            ]
+
+        baseline = load_scoring_baseline(execute)
+
+        self.assertEqual(baseline.weighted_interactions, (17.0,))
+        self.assertEqual(baseline.engagement_rates, (0.17,))
+        self.assertEqual(baseline.reach, (100.0,))
+        self.assertEqual(baseline.impressions, (120.0, 80.0))
+        self.assertEqual(baseline.conversation, (5.0,))
+        self.assertEqual(baseline.follower_delta, (1.0,))
 
 
 if __name__ == "__main__":
