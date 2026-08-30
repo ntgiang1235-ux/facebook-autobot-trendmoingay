@@ -143,6 +143,51 @@ class StyleExperimentLifecycleTests(unittest.TestCase):
     @patch("app.style_experiment_lifecycle.set_style_status")
     @patch("app.style_experiment_lifecycle.load_learning_observations")
     @patch("app.style_experiment_lifecycle.list_active_styles")
+    def test_child_experiment_compares_against_promoted_custom_parent_exposures(
+        self, list_styles, load_observations, set_status
+    ):
+        from app.style_experiment_lifecycle import review_pending_experiment
+
+        parent = variant(
+            identifier=8,
+            value="witty_short_punchline",
+            parent="witty",
+            status="active",
+        )
+        child = variant(
+            identifier=10,
+            value="witty_micro_story",
+            parent="witty_short_punchline",
+            status="explore",
+        )
+        list_styles.side_effect = lambda _execute, dimension: [parent, child] if dimension == "tone" else []
+        load_observations.return_value = (
+            mature_group(
+                "child", 86, count=5,
+                experiment_key="tone:witty_micro_story",
+                style_type="witty",
+            )
+            + mature_group(
+                "custom-parent", 76, count=5,
+                experiment_key="tone:witty_short_punchline",
+                style_type="witty",
+            )
+        )
+
+        result = review_pending_experiment(lambda *_: [], now=NOW)
+
+        self.assertEqual(result.status, "promoted")
+        self.assertEqual(result.parent_mature_samples, 5)
+        set_status.assert_called_once_with(
+            unittest.mock.ANY,
+            10,
+            "active",
+            changed_at=NOW.isoformat(),
+        )
+
+    @patch("app.style_experiment_lifecycle.set_style_status")
+    @patch("app.style_experiment_lifecycle.load_learning_observations")
+    @patch("app.style_experiment_lifecycle.list_active_styles")
     def test_clearly_weak_variant_is_retired(self, list_styles, load_observations, set_status):
         from app.style_experiment_lifecycle import review_pending_experiment
 
