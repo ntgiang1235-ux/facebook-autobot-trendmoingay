@@ -39,7 +39,11 @@ class RunnerPublishTests(unittest.TestCase):
                 (200, {"id": "post-123"}),
                 (500, {"error": "seed failed"}),
             ],
-        ), patch.object(runner.autobot, "validate_runtime_config"):
+        ), patch.object(runner.autobot, "validate_runtime_config"), patch.object(
+            hardening_runner.publication_ledger,
+            "record_published_content",
+            return_value=1,
+        ):
             jobs = self._jobs()
             outcome = jobs["recipe"]()
         self.assertEqual(outcome.status, "success")
