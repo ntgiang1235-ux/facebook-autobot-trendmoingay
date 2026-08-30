@@ -55,6 +55,35 @@ class StylePromptWiringTests(unittest.TestCase):
         post.call_gemini("outside")
         self.assertEqual(post.prompts[-1], "outside")
 
+    def test_prompt_adapter_restores_context_and_gemini_after_exception(self):
+        from app.style_context import current_style_bundle
+        from app.style_prompt_adapter import run_with_style
+        from app.style_strategy import StyleBundle
+
+        class FakeModule:
+            def __init__(self):
+                self.prompts = []
+
+            def call_gemini(self, prompt, timeout=30):
+                self.prompts.append(prompt)
+                return "ok"
+
+        module = FakeModule()
+        original_gemini = module.call_gemini
+        bundle = StyleBundle("contrast", "reflective", "no_cta", "explore")
+
+        def broken_job():
+            module.call_gemini("content")
+            raise RuntimeError("boom")
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            run_with_style("post", module, broken_job, bundle)
+
+        self.assertIsNone(current_style_bundle())
+        self.assertEqual(module.call_gemini, original_gemini)
+        module.call_gemini("after")
+        self.assertEqual(module.prompts[-1], "after")
+
     def test_prepublish_candidate_carries_selected_style_bundle(self):
         from app import prepublish_guard
         from app.style_strategy import StyleBundle
