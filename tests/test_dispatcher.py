@@ -75,6 +75,32 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(kwargs["slot_id"], slot.slot_id)
         self.assertEqual(kwargs["run_key"], "run-1")
 
+    def test_claimed_slot_context_is_visible_only_while_business_job_runs(self):
+        from app.dispatcher import dispatch_due
+        from app.publication_context import current_publication_context
+
+        execute = Mock()
+        slot = claimed_slot("finance")
+        observed = []
+
+        def job():
+            observed.append(current_publication_context())
+            return success("posted")
+
+        with patch("app.dispatcher.claim_due_slot", return_value=slot), patch(
+            "app.dispatcher.finish_slot"
+        ):
+            dispatch_due(execute, {"finance": job}, now=self.now, run_key="run-42")
+
+        self.assertEqual(len(observed), 1)
+        context = observed[0]
+        self.assertEqual(context.run_key, "run-42")
+        self.assertEqual(context.category, "finance")
+        self.assertEqual(context.scheduled_for, slot.planned_for)
+        self.assertEqual(context.strategy_mode, "exploit")
+        self.assertEqual(context.strategy_version, 12)
+        self.assertIsNone(current_publication_context())
+
     def test_business_skip_marks_slot_skipped_not_published(self):
         from app.dispatcher import dispatch_due
 
