@@ -8,6 +8,7 @@ from app.publication_context import PublicationContext, use_publication_context
 
 
 VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+FIRST_SAFE_HHMM = "08:30"
 
 
 def _as_utc(value: datetime | None) -> datetime:
@@ -47,7 +48,11 @@ def dispatch_due(
     grace_minutes: int = 20,
 ) -> JobOutcome:
     current = _as_utc(now)
-    plan_date = local_plan_date(current)
+    local_current = current.astimezone(VIETNAM_TZ)
+    if local_current.strftime("%H:%M") < FIRST_SAFE_HHMM:
+        return skipped(f"before publishing window ({FIRST_SAFE_HHMM} Vietnam)")
+
+    plan_date = local_current.date().isoformat()
     adaptive_jobs.ensure_daily_plan(execute_fn, now=current)
     slot = claim_due_slot(
         execute_fn,
