@@ -1,7 +1,7 @@
 # Phase 4N — Production Readiness & End-to-End Verification
 
 Date: 2026-08-31
-Status: Design approved in chat; implementation pending written-spec review
+Status: Written spec ready for user review; implementation not started
 Branch: `codex/phase-4n-production-readiness`
 PR: #22
 
