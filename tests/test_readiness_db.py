@@ -79,6 +79,7 @@ class ReadinessDatabaseTests(unittest.TestCase):
             "DROP TABLE strategy_stats",
             "REPLACE INTO adaptive_config(id) VALUES (1)",
             "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT 1; UPDATE adaptive_config SET adaptive_enabled = 0",
         ):
             with self.subTest(query=query):
                 with self.assertRaises(ValueError):
