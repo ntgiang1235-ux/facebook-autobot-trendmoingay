@@ -235,9 +235,15 @@ class StyleExperimentSteeringTests(unittest.TestCase):
         load_config.return_value = AdaptiveConfig(exploration_rate=0.20)
         load_stats.return_value = self._stats()
         registry = {
-            "hook": [variant(7, "hook", "number_with_tension", "explore", "number")],
-            "tone": [variant(9, "tone", "witty_short_punchline", "explore", "witty")],
-            "cta": [],
+            "hook": [
+                variant(1, "hook", "number", "baseline"),
+                variant(7, "hook", "number_with_tension", "explore", "number"),
+            ],
+            "tone": [
+                variant(2, "tone", "witty", "baseline"),
+                variant(9, "tone", "witty_short_punchline", "explore", "witty"),
+            ],
+            "cta": [variant(3, "cta", "opinion_question", "baseline")],
         }
         list_styles.side_effect = lambda _execute, dimension: registry[dimension]
 
