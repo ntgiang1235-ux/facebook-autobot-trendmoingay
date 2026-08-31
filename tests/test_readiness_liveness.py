@@ -23,7 +23,8 @@ class ReadinessLivenessTests(unittest.TestCase):
                 scheduled_for TEXT, delay_minutes INTEGER
             );
             CREATE TABLE content_posts (
-                facebook_post_id TEXT, published_at TEXT, status TEXT
+                facebook_post_id TEXT, published_at TEXT, status TEXT,
+                strategy_mode TEXT, scheduled_for TEXT
             );
             """
         )
@@ -63,10 +64,11 @@ class ReadinessLivenessTests(unittest.TestCase):
         )
         self.conn.commit()
 
-    def insert_published(self, published_at):
+    def insert_published(self, published_at, *, strategy_mode="baseline", scheduled_for=None):
+        scheduled = scheduled_for or published_at
         self.conn.execute(
-            "INSERT INTO content_posts VALUES ('fb-post-1', ?, 'published')",
-            (published_at,),
+            "INSERT INTO content_posts VALUES ('fb-post-1', ?, 'published', ?, ?)",
+            (published_at, strategy_mode, scheduled),
         )
         self.conn.commit()
 
@@ -106,6 +108,25 @@ class ReadinessLivenessTests(unittest.TestCase):
         self.assertEqual(check.status, "failed")
         self.assertIn("0 published", check.detail)
         self.assertIn("elapsed", check.detail)
+
+    def test_manual_publish_does_not_mask_elapsed_scheduler_outage(self):
+        self.insert_plan(
+            "2026-08-31T01:30:00+00:00",
+            "2026-08-31T02:00:00+00:00",
+            "2026-08-31T02:30:00+00:00",
+            "2026-08-31T03:00:00+00:00",
+        )
+        self.insert_dispatch("2026-08-31T03:20:00+00:00")
+        self.insert_published(
+            "2026-08-31T02:10:00+00:00",
+            strategy_mode="manual",
+            scheduled_for=None,
+        )
+        now = datetime(2026, 8, 31, 3, 30, tzinfo=timezone.utc)
+
+        check = readiness._liveness_check(self.execute, self.config, now)
+        self.assertEqual(check.status, "failed")
+        self.assertIn("0 published", check.detail)
 
     def test_recent_dispatch_and_publication_is_ready(self):
         self.insert_plan(
