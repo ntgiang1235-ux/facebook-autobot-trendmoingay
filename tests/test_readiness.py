@@ -304,15 +304,16 @@ class ReadinessInvariantTests(unittest.TestCase):
             "failed",
         )
 
-    def test_wrong_last_good_audit_flag_is_failed(self):
+    def test_historical_last_good_flags_do_not_override_canonical_pointer(self):
         self.conn.execute(
-            "UPDATE strategy_versions SET is_last_good = CASE version_id WHEN 1 THEN 0 ELSE 1 END"
+            "UPDATE adaptive_config SET last_good_strategy_version = 2 WHERE id = 1"
         )
-        self.assert_check(
+        check = self.assert_check(
             readiness.run_core_checks(self.execute),
             "strategy_versions",
-            "failed",
+            "ready",
         )
+        self.assertIn("last_good=v2", check.detail)
 
     def test_malformed_snapshot_json_is_failed(self):
         self.conn.execute(
