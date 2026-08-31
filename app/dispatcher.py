@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app import adaptive_jobs
 from app.job_contract import JobOutcome, skipped, success
 from app.plan_repository import claim_due_slot, finish_slot
 from app.publication_context import PublicationContext, use_publication_context
@@ -47,6 +48,7 @@ def dispatch_due(
 ) -> JobOutcome:
     current = _as_utc(now)
     plan_date = local_plan_date(current)
+    adaptive_jobs.ensure_daily_plan(execute_fn, now=current)
     slot = claim_due_slot(
         execute_fn,
         plan_date=plan_date,
