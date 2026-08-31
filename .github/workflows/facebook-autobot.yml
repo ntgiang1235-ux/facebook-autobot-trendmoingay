@@ -21,6 +21,7 @@ on:
           - health
           - metrics
           - learn
+          - strategy_guard
           - style_evolve
           - planner
           - dispatch
@@ -34,10 +35,13 @@ on:
     # Refresh adaptive learning from mature metrics before planning the day.
     - cron: "27 0 * * *"
 
+    # Guard the new strategy against mature 7-day performance regression.
+    - cron: "32 0 * * *"
+
     # Evolve at most one controlled style experiment weekly before planning.
     - cron: "37 0 * * 0"
 
-    # Build today's adaptive content plan after health/learning, before first slot.
+    # Build today's adaptive content plan after health/learning/guard, before first slot.
     - cron: "47 0 * * *"
 
     # Adaptive dispatcher. GitHub only wakes the bot; Turso daily_plan decides
@@ -115,6 +119,7 @@ jobs:
             case "${{ github.event.schedule }}" in
               "17 0 * * *") ACTION="health" ;;
               "27 0 * * *") ACTION="learn" ;;
+              "32 0 * * *") ACTION="strategy_guard" ;;
               "37 0 * * 0") ACTION="style_evolve" ;;
               "47 0 * * *") ACTION="planner" ;;
               "7,37 * * * *") ACTION="dispatch" ;;

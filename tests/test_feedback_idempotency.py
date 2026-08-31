@@ -1,12 +1,12 @@
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from app.strategy_models import AdaptiveConfig
 
 
 class FeedbackIdempotencyTests(unittest.TestCase):
-    def test_same_vietnam_day_reuses_version_and_repairs_config_pointer(self):
+    def test_same_vietnam_day_reuses_version_and_repairs_only_current_pointer(self):
         from app import feedback_loop
 
         def execute(query, params=()):
@@ -19,7 +19,7 @@ class FeedbackIdempotencyTests(unittest.TestCase):
 
         config = AdaptiveConfig(
             current_strategy_version=None,
-            last_good_strategy_version=None,
+            last_good_strategy_version=5,
         )
         with patch.object(feedback_loop, "load_config", return_value=config), patch.object(
             feedback_loop, "save_config"
@@ -39,9 +39,9 @@ class FeedbackIdempotencyTests(unittest.TestCase):
         load_observations.assert_not_called()
         repaired = save_config.call_args.args[1]
         self.assertEqual(repaired.current_strategy_version, 7)
-        self.assertEqual(repaired.last_good_strategy_version, 7)
+        self.assertEqual(repaired.last_good_strategy_version, 5)
 
-    def test_new_vietnam_day_can_create_next_version_even_when_utc_date_is_same(self):
+    def test_new_vietnam_day_creates_next_version_without_promoting_last_good(self):
         from app import feedback_loop
 
         def execute(query, params=()):
@@ -56,7 +56,7 @@ class FeedbackIdempotencyTests(unittest.TestCase):
 
         config = AdaptiveConfig(
             current_strategy_version=7,
-            last_good_strategy_version=7,
+            last_good_strategy_version=5,
         )
         with patch.object(feedback_loop, "load_config", return_value=config), patch.object(
             feedback_loop, "load_learning_observations", return_value=[]
@@ -68,7 +68,7 @@ class FeedbackIdempotencyTests(unittest.TestCase):
             feedback_loop, "save_strategy_version"
         ) as save_version, patch.object(
             feedback_loop, "save_config"
-        ):
+        ) as save_config:
             result = feedback_loop.refresh_strategy(
                 execute,
                 now=datetime(2026, 8, 31, 17, 30, tzinfo=timezone.utc),
@@ -76,6 +76,14 @@ class FeedbackIdempotencyTests(unittest.TestCase):
 
         self.assertEqual(result.version_id, 8)
         save_version.assert_called_once()
+        snapshot = save_version.call_args.args[1]
+        self.assertEqual(snapshot.version_id, 8)
+        self.assertFalse(snapshot.is_last_good)
+        self.assertEqual(snapshot.config.current_strategy_version, 8)
+        self.assertEqual(snapshot.config.last_good_strategy_version, 5)
+        persisted = save_config.call_args.args[1]
+        self.assertEqual(persisted.current_strategy_version, 8)
+        self.assertEqual(persisted.last_good_strategy_version, 5)
 
 
 if __name__ == "__main__":

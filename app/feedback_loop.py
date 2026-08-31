@@ -342,16 +342,12 @@ def refresh_strategy(execute_fn, *, now: datetime | None = None) -> StrategyRefr
     if latest is not None:
         latest_version_id, latest_created_at = latest
         if latest_created_at.astimezone(VIETNAM_TZ).date() == current.astimezone(VIETNAM_TZ).date():
-            if (
-                config.current_strategy_version != latest_version_id
-                or config.last_good_strategy_version != latest_version_id
-            ):
+            if config.current_strategy_version != latest_version_id:
                 save_config(
                     execute_fn,
                     replace(
                         config,
                         current_strategy_version=latest_version_id,
-                        last_good_strategy_version=latest_version_id,
                     ),
                 )
             return StrategyRefreshResult(
@@ -396,7 +392,6 @@ def refresh_strategy(execute_fn, *, now: datetime | None = None) -> StrategyRefr
     updated_config = replace(
         config,
         current_strategy_version=version_id,
-        last_good_strategy_version=version_id,
     )
     weights: dict[str, dict[str, float]] = {}
     for stat in refreshed:
@@ -408,7 +403,7 @@ def refresh_strategy(execute_fn, *, now: datetime | None = None) -> StrategyRefr
         config=updated_config,
         created_at=current.isoformat(),
         reason="14-day adaptive feedback refresh",
-        is_last_good=True,
+        is_last_good=False,
     )
     save_strategy_version(execute_fn, snapshot)
     save_config(execute_fn, updated_config)
