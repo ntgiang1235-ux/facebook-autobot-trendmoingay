@@ -297,7 +297,6 @@ def _strategy_versions_check(execute_fn, config: AdaptiveConfig) -> ReadinessChe
         (),
     )
     versions = {}
-    flagged = []
     for row in rows:
         version_id = row[0]
         if isinstance(version_id, bool) or not isinstance(version_id, int) or version_id <= 0:
@@ -328,8 +327,6 @@ def _strategy_versions_check(execute_fn, config: AdaptiveConfig) -> ReadinessChe
                 FAILED,
                 f"v{version_id} is_last_good must be 0/1",
             )
-        if bool(row[5]):
-            flagged.append(version_id)
 
     current = config.current_strategy_version
     last_good = config.last_good_strategy_version
@@ -350,24 +347,6 @@ def _strategy_versions_check(execute_fn, config: AdaptiveConfig) -> ReadinessChe
             "strategy_versions",
             FAILED,
             f"last-good v{last_good} cannot be newer than current v{current}",
-        )
-
-    if last_good is None:
-        if flagged:
-            return ReadinessCheck(
-                "strategy_versions",
-                FAILED,
-                "last-good pointer is null but audit flags remain set: "
-                + ", ".join(f"v{value}" for value in flagged),
-            )
-    elif flagged != [last_good]:
-        return ReadinessCheck(
-            "strategy_versions",
-            FAILED,
-            (
-                f"expected exactly last-good v{last_good} to be audit-flagged; "
-                f"found {flagged}"
-            ),
         )
 
     if current is not None:
