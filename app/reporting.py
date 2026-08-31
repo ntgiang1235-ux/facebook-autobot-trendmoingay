@@ -46,6 +46,7 @@ class WeeklyReportData:
     styles: tuple[RankedStat, ...]
     strategy_version: int | None
     metric_warning: str | None
+    ctas: tuple[RankedStat, ...] = ()
 
 
 def _as_utc(value: datetime | None) -> datetime:
@@ -109,6 +110,7 @@ def build_weekly_report(data: WeeklyReportData, report_date: str) -> str:
         f"Giờ: {_format_ranked(data.time_buckets)}",
         f"Hook: {_format_ranked(data.hooks)}",
         f"Style: {_format_ranked(data.styles)}",
+        f"CTA: {_format_ranked(data.ctas)}",
         f"Strategy: {strategy}",
     ]
     if data.metric_warning:
@@ -246,10 +248,11 @@ def load_weekly_report(execute_fn, end_date: str) -> WeeklyReportData:
         average_score=average,
         categories=_ranked_strategy(execute_fn, "category"),
         time_buckets=_ranked_strategy(execute_fn, "time_bucket"),
-        hooks=_ranked_strategy(execute_fn, "hook"),
-        styles=_ranked_strategy(execute_fn, "style"),
+        hooks=_ranked_strategy(execute_fn, "hook_type"),
+        styles=_ranked_strategy(execute_fn, "style_type"),
         strategy_version=config.current_strategy_version,
         metric_warning=warning,
+        ctas=_ranked_strategy(execute_fn, "cta_type"),
     )
 
 
