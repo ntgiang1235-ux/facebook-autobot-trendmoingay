@@ -363,6 +363,57 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
     return jobs
 
 
+def _run_opportunistic_dispatch(
+    jobs: dict[str, Callable[[], object]],
+    *,
+    parent_run_key: str,
+    scheduled_for: str | None,
+    delay_minutes: int | None,
+) -> JobOutcome:
+    dispatch_run_key = f"{parent_run_key}-opportunistic-dispatch"
+    started_at = utc_now_iso()
+    db.record_job(
+        dispatch_run_key,
+        "dispatch",
+        "started",
+        started_at,
+        None,
+        "",
+        scheduled_for,
+        delay_minutes,
+    )
+    adaptive_content_jobs = {
+        action: jobs[action]
+        for action in ADAPTIVE_CONTENT_ACTIONS
+    }
+
+    def recorder(status: str, detail: str = "") -> None:
+        db.record_job(
+            dispatch_run_key,
+            "dispatch",
+            status,
+            started_at,
+            utc_now_iso(),
+            detail[:1000],
+            scheduled_for,
+            delay_minutes,
+        )
+
+    def notifier(_: str, error: Exception) -> None:
+        notifications.send_failure("dispatch", error, github_run_url())
+
+    return run_job(
+        "dispatch",
+        lambda: dispatcher.dispatch_due(
+            db.execute,
+            adaptive_content_jobs,
+            run_key=dispatch_run_key,
+        ),
+        recorder,
+        notifier,
+    )
+
+
 def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None) -> JobOutcome:
     if action not in VALID_ACTIONS:
         raise ValueError(f"Action không hợp lệ: {action}")
@@ -388,6 +439,17 @@ def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None)
         scheduled_for,
         meta.delay_minutes,
     )
+
+    # Any real GitHub schedule wake can service one currently due content slot.
+    # Manual actions never gain this publishing side effect, and the explicit
+    # dispatcher action is already the single intended dispatch attempt.
+    if os.getenv("GITHUB_EVENT_NAME", "").strip() == "schedule" and action != "dispatch":
+        _run_opportunistic_dispatch(
+            jobs,
+            parent_run_key=run_key,
+            scheduled_for=scheduled_for,
+            delay_minutes=meta.delay_minutes,
+        )
 
     # Maintenance actions are safe to execute late: they do not publish content
     # directly and already have idempotency/data-maturity guards of their own.
