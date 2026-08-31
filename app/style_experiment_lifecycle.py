@@ -44,14 +44,20 @@ def _as_utc(value: datetime | None) -> datetime:
     return current.astimezone(timezone.utc)
 
 
-def _pending_experiment(execute_fn) -> StyleVariant | None:
-    pending: list[StyleVariant] = []
-    for dimension in _REGISTRY_TO_OBSERVED:
-        pending.extend(
-            item
-            for item in list_active_styles(execute_fn, dimension)
-            if item.status == "explore"
-        )
+def _registry_snapshot(execute_fn) -> dict[str, list[StyleVariant]]:
+    return {
+        dimension: list_active_styles(execute_fn, dimension)
+        for dimension in _REGISTRY_TO_OBSERVED
+    }
+
+
+def _pending_experiment(registry: dict[str, list[StyleVariant]]) -> StyleVariant | None:
+    pending = [
+        item
+        for items in registry.values()
+        for item in items
+        if item.status == "explore"
+    ]
     if len(pending) > 1:
         raise RuntimeError("multiple pending style experiments violate lifecycle invariant")
     return pending[0] if pending else None
@@ -93,10 +99,29 @@ def _result(
     )
 
 
+def _custom_parent(
+    registry: dict[str, list[StyleVariant]],
+    experiment: StyleVariant,
+) -> StyleVariant | None:
+    if not experiment.parent_value:
+        return None
+    return next(
+        (
+            item
+            for item in registry.get(experiment.dimension, [])
+            if item.value == experiment.parent_value
+            and item.parent_value is not None
+            and item.status == "active"
+        ),
+        None,
+    )
+
+
 def review_pending_experiment(execute_fn, *, now: datetime | None = None) -> LifecycleResult:
     """Deterministically keep, promote, or retire the one pending style experiment."""
     current = _as_utc(now)
-    experiment = _pending_experiment(execute_fn)
+    registry = _registry_snapshot(execute_fn)
+    experiment = _pending_experiment(registry)
     if experiment is None:
         return LifecycleResult(status="no_pending", detail="no pending style experiment")
 
@@ -135,12 +160,22 @@ def review_pending_experiment(execute_fn, *, now: datetime | None = None) -> Lif
             "experiment has no parent value for control comparison",
         )
 
-    parent_observations = [
-        observation
-        for observation in observations
-        if observation.style_experiment_key is None
-        and str(getattr(observation, observed_field)) == experiment.parent_value
-    ]
+    custom_parent = _custom_parent(registry, experiment)
+    if custom_parent is not None:
+        parent_key = f"{experiment.dimension}:{custom_parent.value}"
+        parent_observations = [
+            observation
+            for observation in observations
+            if observation.style_experiment_key == parent_key
+        ]
+    else:
+        parent_observations = [
+            observation
+            for observation in observations
+            if observation.style_experiment_key is None
+            and str(getattr(observation, observed_field)) == experiment.parent_value
+        ]
+
     parent_stat = aggregate_dimension(
         _learning_samples(parent_observations),
         current,
