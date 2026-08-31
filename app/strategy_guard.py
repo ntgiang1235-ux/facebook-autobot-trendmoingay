@@ -125,6 +125,16 @@ def _empty_evidence(start: datetime, end: datetime) -> StrategyEvidence:
     )
 
 
+def _sync_last_good_flag(execute_fn, version_id: int) -> None:
+    execute_fn(
+        """
+        UPDATE strategy_versions
+        SET is_last_good = CASE WHEN version_id = ? THEN 1 ELSE 0 END
+        """,
+        (version_id,),
+    )
+
+
 def run_strategy_guard(
     execute_fn,
     *,
@@ -197,6 +207,15 @@ def run_strategy_guard(
     regression = 1.0 - (recent.average_score / prior.average_score)
     if regression <= ROLLBACK_REGRESSION:
         if config.last_good_strategy_version == config.current_strategy_version:
+            if transaction_fn is None:
+                _sync_last_good_flag(execute_fn, config.current_strategy_version)
+            else:
+                transaction_fn(
+                    lambda transaction_execute: _sync_last_good_flag(
+                        transaction_execute,
+                        config.current_strategy_version,
+                    )
+                )
             return StrategyGuardResult(
                 status="stable",
                 recent=recent,
@@ -210,7 +229,15 @@ def run_strategy_guard(
             config,
             last_good_strategy_version=config.current_strategy_version,
         )
-        save_config(execute_fn, promoted)
+
+        def persist_promotion(transaction_execute):
+            _sync_last_good_flag(transaction_execute, config.current_strategy_version)
+            save_config(transaction_execute, promoted)
+
+        if transaction_fn is None:
+            persist_promotion(execute_fn)
+        else:
+            transaction_fn(persist_promotion)
         return StrategyGuardResult(
             status="promoted_last_good",
             recent=recent,
@@ -273,6 +300,7 @@ def run_strategy_guard(
             upsert_stat(transaction_execute, stat)
         if existing is None:
             save_strategy_version(transaction_execute, rollback_snapshot)
+        _sync_last_good_flag(transaction_execute, target_version)
         save_config(transaction_execute, rollback_config)
 
     if transaction_fn is None:
