@@ -34,6 +34,31 @@ class DispatcherTests(unittest.TestCase):
         late_utc = datetime(2026, 8, 30, 18, 10, tzinfo=timezone.utc)
         self.assertEqual(local_plan_date(late_utc), "2026-08-31")
 
+    def test_dispatch_self_heals_today_plan_before_atomic_claim(self):
+        from app import dispatcher
+
+        execute = Mock()
+        order = []
+        with patch.object(
+            dispatcher.adaptive_jobs,
+            "ensure_daily_plan",
+            side_effect=lambda *args, **kwargs: order.append("ensure") or skipped("exists"),
+        ) as ensure, patch.object(
+            dispatcher,
+            "claim_due_slot",
+            side_effect=lambda *args, **kwargs: order.append("claim") or None,
+        ):
+            outcome = dispatcher.dispatch_due(
+                execute,
+                {},
+                now=self.now,
+                run_key="run-1",
+            )
+
+        self.assertEqual(outcome.status, "skipped")
+        self.assertEqual(order, ["ensure", "claim"])
+        ensure.assert_called_once_with(execute, now=self.now)
+
     def test_no_due_slot_is_successful_skip_and_executes_no_business_job(self):
         from app.dispatcher import dispatch_due
 

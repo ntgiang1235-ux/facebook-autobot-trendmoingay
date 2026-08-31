@@ -18,7 +18,7 @@ DEGRADED = "degraded"
 FAILED = "failed"
 
 REQUIRED_COLUMNS = {
-    "job_runs": set(),
+    "job_runs": {"action", "status", "started_at"},
     "content_posts": {
         "facebook_post_id",
         "category",
@@ -108,6 +108,11 @@ REGISTRY_TO_STAT = {
     "tone": "style_type",
     "cta": "cta_type",
 }
+FIRST_SAFE_SLOT_HOUR = 8
+FIRST_SAFE_SLOT_MINUTE = 30
+DISPATCH_FRESHNESS_MINUTES = 90
+DISPATCH_GRACE_MINUTES = 20
+MIN_ELAPSED_SLOTS_FOR_PUBLICATION = 3
 
 
 @dataclass(frozen=True)
@@ -649,6 +654,156 @@ def _parse_planned_for(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _liveness_check(
+    execute_fn,
+    config: AdaptiveConfig,
+    now: datetime,
+) -> ReadinessCheck:
+    if not config.adaptive_enabled or not config.auto_schedule_enabled:
+        return ReadinessCheck(
+            "liveness",
+            READY,
+            "adaptive scheduling disabled; operational dispatch liveness not required",
+        )
+
+    current = _as_utc(now)
+    local = current.astimezone(VIETNAM_TZ)
+    local_date = local.date()
+    plan_date = local_date.isoformat()
+    first_slot_local = datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        FIRST_SAFE_SLOT_HOUR,
+        FIRST_SAFE_SLOT_MINUTE,
+        tzinfo=VIETNAM_TZ,
+    )
+    day_start_local = datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        tzinfo=VIETNAM_TZ,
+    )
+    day_end_local = day_start_local + timedelta(days=1)
+    day_start_utc = day_start_local.astimezone(timezone.utc)
+    day_end_utc = day_end_local.astimezone(timezone.utc)
+
+    plan_rows = execute_fn(
+        """
+        SELECT planned_for, status
+        FROM daily_plan
+        WHERE plan_date = ?
+        ORDER BY planned_for, slot_id
+        """,
+        (plan_date,),
+    )
+    if not plan_rows:
+        if local < first_slot_local:
+            return ReadinessCheck(
+                "liveness",
+                DEGRADED,
+                f"no persisted daily_plan for {plan_date} before 08:30 Vietnam",
+            )
+        return ReadinessCheck(
+            "liveness",
+            FAILED,
+            f"no persisted daily_plan for {plan_date} at/after 08:30 Vietnam",
+        )
+
+    if local < first_slot_local:
+        return ReadinessCheck(
+            "liveness",
+            READY,
+            f"plan={len(plan_rows)} persisted before publishing window",
+        )
+
+    dispatch_rows = execute_fn(
+        """
+        SELECT started_at, status
+        FROM job_runs
+        WHERE action = 'dispatch'
+          AND started_at >= ?
+          AND started_at < ?
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (day_start_utc.isoformat(), day_end_utc.isoformat()),
+    )
+    if not dispatch_rows:
+        return ReadinessCheck(
+            "liveness",
+            FAILED,
+            f"no dispatcher run recorded for {plan_date} after publishing day began",
+        )
+
+    try:
+        latest_dispatch = _parse_planned_for(str(dispatch_rows[0][0]))
+    except (TypeError, ValueError) as error:
+        return ReadinessCheck(
+            "liveness",
+            FAILED,
+            f"latest dispatcher timestamp is invalid: {error}",
+        )
+    dispatch_age = current - latest_dispatch
+    if dispatch_age > timedelta(minutes=DISPATCH_FRESHNESS_MINUTES):
+        age_minutes = max(0, int(dispatch_age.total_seconds() // 60))
+        return ReadinessCheck(
+            "liveness",
+            FAILED,
+            (
+                f"latest dispatcher is {age_minutes} minutes old; "
+                f"maximum is {DISPATCH_FRESHNESS_MINUTES} minutes"
+            ),
+        )
+
+    cutoff = current - timedelta(minutes=DISPATCH_GRACE_MINUTES)
+    elapsed = 0
+    for planned_for, _status in plan_rows:
+        try:
+            planned_at = _parse_planned_for(str(planned_for))
+        except (TypeError, ValueError) as error:
+            return ReadinessCheck(
+                "liveness",
+                FAILED,
+                f"current daily_plan has invalid planned_for: {error}",
+            )
+        if planned_at < cutoff:
+            elapsed += 1
+
+    publication_rows = execute_fn(
+        """
+        SELECT COUNT(*)
+        FROM content_posts
+        WHERE status = 'published'
+          AND facebook_post_id IS NOT NULL
+          AND strategy_mode IN ('baseline', 'exploit', 'explore', 'retest')
+          AND scheduled_for IS NOT NULL
+          AND published_at >= ?
+          AND published_at < ?
+        """,
+        (day_start_utc.isoformat(), day_end_utc.isoformat()),
+    )
+    published = int(publication_rows[0][0]) if publication_rows else 0
+    if elapsed >= MIN_ELAPSED_SLOTS_FOR_PUBLICATION and published == 0:
+        return ReadinessCheck(
+            "liveness",
+            FAILED,
+            (
+                f"{elapsed} elapsed slots are outside {DISPATCH_GRACE_MINUTES}-minute grace "
+                f"but 0 published content rows exist for {plan_date}"
+            ),
+        )
+
+    return ReadinessCheck(
+        "liveness",
+        READY,
+        (
+            f"plan={len(plan_rows)}; latest_dispatch={latest_dispatch.isoformat()}; "
+            f"elapsed={elapsed}; published={published}"
+        ),
+    )
+
+
 def _shadow_plan_check(
     slots,
     *,
@@ -692,13 +847,13 @@ def _shadow_plan_check(
                 FAILED,
                 f"slot {slot.slot_id} has invalid planned_for: {error}",
             )
-        local = planned_at.astimezone(VIETNAM_TZ)
-        hhmm = local.strftime("%H:%M")
-        if local.date() != plan_date or hhmm not in SAFE_TIME_BUCKETS:
+        local_slot = planned_at.astimezone(VIETNAM_TZ)
+        hhmm = local_slot.strftime("%H:%M")
+        if local_slot.date() != plan_date or hhmm not in SAFE_TIME_BUCKETS:
             return ReadinessCheck(
                 "shadow_plan",
                 FAILED,
-                f"slot {slot.slot_id} is outside safe Vietnam schedule: {local.isoformat()}",
+                f"slot {slot.slot_id} is outside safe Vietnam schedule: {local_slot.isoformat()}",
             )
         if slot.status != "planned":
             return ReadinessCheck(
@@ -813,11 +968,13 @@ def run_readiness(
         checks.append(config_check)
         return ReadinessResult(FAILED, tuple(checks))
 
+    current = _as_utc(now)
+    checks.append(_liveness_check(execute_fn, config, current))
+
     stats = _load_strategy_stats(execute_fn)
     learning = _learning_check(config, stats)
     checks.append(learning)
 
-    current = _as_utc(now)
     plan_date = current.astimezone(VIETNAM_TZ).date() + timedelta(days=1)
     category_stats = [stat for stat in stats if stat.dimension == "category"]
     time_stats = [stat for stat in stats if stat.dimension == "time_bucket"]

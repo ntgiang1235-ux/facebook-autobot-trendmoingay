@@ -113,6 +113,24 @@ class ReadinessShadowPlanTests(unittest.TestCase):
                 "INSERT INTO style_registry(dimension,value,parent_value,status,created_at) VALUES (?, ?, NULL, 'baseline', '2026-08-01T00:00:00+00:00')",
                 (dimension, value),
             )
+        self.conn.execute(
+            """
+            INSERT INTO daily_plan VALUES (
+                '2026-08-31', '0830-post-01', '2026-08-31T01:30:00+00:00',
+                'post', 'post', 'baseline', 2, 'planned', NULL, NULL, NULL, '',
+                '2026-08-31T00:47:00+00:00'
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            INSERT INTO job_runs VALUES (
+                'dispatch-recent', 'dispatch', 'skipped',
+                '2026-08-31T01:50:00+00:00', '2026-08-31T01:50:10+00:00',
+                'no due plan slot', NULL, NULL
+            )
+            """
+        )
         self.conn.commit()
 
     def _insert_stat(self, dimension, value, current_weight):
@@ -157,6 +175,7 @@ class ReadinessShadowPlanTests(unittest.TestCase):
         self.assertEqual(result.status, "ready")
         self.assertEqual(writes, [])
         self.assertEqual(self.get_check(result, "learning").status, "ready")
+        self.assertEqual(self.get_check(result, "liveness").status, "ready")
         shadow = self.get_check(result, "shadow_plan")
         self.assertEqual(shadow.status, "ready")
         self.assertIn("2026-09-01", shadow.detail)
@@ -166,7 +185,16 @@ class ReadinessShadowPlanTests(unittest.TestCase):
         result = readiness.run_readiness(self.execute, now=self.now)
         self.assertEqual(result.status, "degraded")
         self.assertEqual(self.get_check(result, "learning").status, "degraded")
+        self.assertEqual(self.get_check(result, "liveness").status, "ready")
         self.assertEqual(self.get_check(result, "shadow_plan").status, "ready")
+
+    def test_liveness_failure_overrides_learning_degradation(self):
+        self.conn.execute("UPDATE strategy_stats SET sample_count = 0")
+        self.conn.execute("DELETE FROM daily_plan WHERE plan_date = '2026-08-31'")
+        result = readiness.run_readiness(self.execute, now=self.now)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(self.get_check(result, "learning").status, "degraded")
+        self.assertEqual(self.get_check(result, "liveness").status, "failed")
 
     def test_duplicate_planner_output_fails_closed(self):
         duplicate = self._slot()

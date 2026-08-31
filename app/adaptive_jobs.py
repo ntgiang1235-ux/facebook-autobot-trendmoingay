@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app import plan_repository, planner, strategy_repository
-from app.job_contract import JobOutcome, success
+from app.job_contract import JobOutcome, skipped, success
 
 
 VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -30,3 +30,16 @@ def create_daily_plan(execute_fn, now: datetime | None = None) -> JobOutcome:
     )
     plan_repository.save_slots(execute_fn, slots)
     return success(f"planned {len(slots)} slots for {plan_date.isoformat()}")
+
+
+def ensure_daily_plan(execute_fn, now: datetime | None = None) -> JobOutcome:
+    """Create today's Vietnam plan only when no persisted slot exists yet."""
+    current = _as_utc(now)
+    plan_date = current.astimezone(VIETNAM_TZ).date().isoformat()
+    existing = execute_fn(
+        "SELECT 1 FROM daily_plan WHERE plan_date = ? LIMIT 1",
+        (plan_date,),
+    )
+    if existing:
+        return skipped(f"plan already exists for {plan_date}")
+    return create_daily_plan(execute_fn, now=current)
