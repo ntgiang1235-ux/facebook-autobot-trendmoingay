@@ -37,6 +37,33 @@ def execute(query: str, params: tuple = ()) -> list[tuple]:
     return run_with_retry(lambda: _execute_once(query, params))
 
 
+def _execute_transaction_once(operation):
+    validate_config()
+    conn = libsql.connect(database=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
+    try:
+        def transaction_execute(query: str, params: tuple = ()) -> list[tuple]:
+            cur = conn.execute(query, params)
+            return cur.fetchall()
+
+        result = operation(transaction_execute)
+        conn.commit()
+        return result
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            # Preserve the original transaction/business exception.
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def execute_transaction(operation):
+    """Execute a callback on one Turso connection and commit or rollback atomically."""
+    return run_with_retry(lambda: _execute_transaction_once(operation))
+
+
 def ensure_schema() -> None:
     execute(
         """
