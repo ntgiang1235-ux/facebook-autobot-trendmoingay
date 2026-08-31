@@ -85,6 +85,23 @@ def _pending_experiments(registered_by_dimension):
     return pending
 
 
+def _selected_custom_treatment_key(values, registered_by_dimension) -> str | None:
+    matches: list[str] = []
+    for stat_dimension, registry_dimension in _DIMENSIONS:
+        selected = values.get(stat_dimension)
+        if selected is None:
+            continue
+        for item in registered_by_dimension[registry_dimension]:
+            if (
+                item.value == selected
+                and item.status == "active"
+                and item.parent_value is not None
+            ):
+                matches.append(f"{registry_dimension}:{item.value}")
+                break
+    return matches[0] if len(matches) == 1 else None
+
+
 def _experiment_target(stats, registered_by_dimension, rng) -> StyleTarget | None:
     pending = _pending_experiments(registered_by_dimension)
     if not pending:
@@ -121,8 +138,8 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
     One exploit/explore mode applies to the whole profile. Exploitation only uses
     mature active strategy values. During exploration, a pending custom experiment
     gets priority and changes exactly one dimension; the other dimensions use
-    mature winners as controls. If no custom experiment is pending, exploration
-    falls back to approved registered under-sampled values as before.
+    mature winners as controls. Promoted custom variants retain their treatment key
+    when later selected so their real exploit performance continues to feed learning.
     """
     config = load_config(execute_fn)
     if not config.adaptive_enabled:
@@ -139,9 +156,9 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
     ensure_seed_styles(execute_fn)
     generator = rng or random.SystemRandom()
     mode = select_mode(generator, config.exploration_rate)
+    registered_by_dimension = _registered_by_dimension(execute_fn)
 
     if mode == "explore":
-        registered_by_dimension = _registered_by_dimension(execute_fn)
         experiment = _experiment_target(stats, registered_by_dimension, generator)
         if experiment is not None:
             return experiment
@@ -168,6 +185,10 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
         style_type=values["style_type"],
         cta_type=values["cta_type"],
         mode=mode,
+        experiment_key=_selected_custom_treatment_key(
+            values,
+            registered_by_dimension,
+        ),
     )
 
 
