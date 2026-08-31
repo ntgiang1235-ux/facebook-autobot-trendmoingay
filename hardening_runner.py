@@ -20,6 +20,7 @@ from app import (
     publication_ledger,
     reporting,
     scheduler,
+    strategy_guard,
     style_evolution,
     style_experiment_lifecycle,
     style_steering,
@@ -41,6 +42,7 @@ VALID_ACTIONS = {
     "health",
     "metrics",
     "learn",
+    "strategy_guard",
     "style_evolve",
     "planner",
     "dispatch",
@@ -205,6 +207,48 @@ def _style_evolution_job() -> JobOutcome:
     raise RuntimeError(result.detail or f"style evolution failed: {result.status}")
 
 
+def _send_strategy_rollback_alert(result) -> None:
+    regression = (
+        f"{result.regression_ratio:.1%}"
+        if result.regression_ratio is not None
+        else "unknown"
+    )
+    target = (
+        f"v{result.last_good_version}"
+        if result.last_good_version is not None
+        else "unknown"
+    )
+    message = (
+        "⚠️ <b>STRATEGY ROLLBACK</b>\n"
+        f"Khôi phục {target} | regression {regression}\n"
+        f"{result.detail or 'automatic strategy rollback completed'}"
+    )
+    try:
+        if not notifications.send_message(message):
+            print("⚠️ Strategy rollback alert delivery failed")
+    except Exception as error:
+        print(f"⚠️ Strategy rollback alert delivery failed: {error}")
+
+
+def _strategy_guard_job() -> JobOutcome:
+    result = strategy_guard.run_strategy_guard(db.execute)
+    normal_skips = {
+        "disabled",
+        "no_current",
+        "insufficient_data",
+        "metric_degraded",
+        "no_last_good",
+    }
+    if result.status in normal_skips:
+        return skipped(result.detail or result.status)
+    if result.status in {"stable", "promoted_last_good"}:
+        return success(result.detail or result.status)
+    if result.status == "rolled_back":
+        _send_strategy_rollback_alert(result)
+        return success(result.detail or result.status)
+    raise RuntimeError(result.detail or f"strategy guard failed: {result.status}")
+
+
 def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], object]]:
     """Resolve jobs through shared DB, verified HTTP and explicit outcome adapters."""
     autobot.execute_db = db.execute
@@ -283,6 +327,7 @@ def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], 
     )
     jobs["metrics"] = lambda: metrics_runner.collect_due_metrics()
     jobs["learn"] = lambda: feedback_loop.refresh_strategy(db.execute)
+    jobs["strategy_guard"] = _strategy_guard_job
     jobs["style_evolve"] = _style_evolution_job
     jobs["report_daily"] = lambda: reporting.send_daily_report(
         db.execute,
@@ -379,7 +424,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
             "Cách dùng: python hardening_runner.py "
-            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|style_evolve|planner|dispatch|report_daily|report_weekly>"
+            "<post|reply|finance|philosophy|summary|veo|recipe|fun|video|health|metrics|learn|strategy_guard|style_evolve|planner|dispatch|report_daily|report_weekly>"
         )
     run_action(sys.argv[1])
 
