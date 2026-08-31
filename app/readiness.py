@@ -1,9 +1,17 @@
 import json
 import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
-from app.planner import CORE_ACTIONS, SAFE_TIME_BUCKETS
-from app.strategy_models import AdaptiveConfig
+from app.planner import (
+    CORE_ACTIONS,
+    SAFE_TIME_BUCKETS,
+    VIETNAM_TZ,
+    _learning_ready,
+    _time_learning_ready,
+    build_daily_plan,
+)
+from app.strategy_models import AdaptiveConfig, StrategyStat
 
 READY = "ready"
 DEGRADED = "degraded"
@@ -94,6 +102,7 @@ CANONICAL_STAT_DIMENSIONS = {
 VALID_STAT_STATUSES = {"insufficient_data", "active", "suspended", "retired"}
 VALID_REGISTRY_DIMENSIONS = {"hook", "tone", "cta"}
 VALID_REGISTRY_STATUSES = {"baseline", "explore", "active", "retired"}
+VALID_STRATEGY_MODES = {"baseline", "exploit", "explore", "retest"}
 REGISTRY_TO_STAT = {
     "hook": "hook_type",
     "tone": "style_type",
@@ -121,6 +130,13 @@ def aggregate_checks(checks) -> str:
     if DEGRADED in statuses:
         return DEGRADED
     return READY
+
+
+def _as_utc(value: datetime | None) -> datetime:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc)
 
 
 def _finite_number(value) -> float | None:
@@ -586,6 +602,204 @@ def _style_registry_check(execute_fn) -> ReadinessCheck:
     )
 
 
+def _load_strategy_stats(execute_fn) -> list[StrategyStat]:
+    rows = execute_fn(
+        """
+        SELECT dimension, value, sample_count, weighted_score_14d,
+               recent_score_7d, success_rate, current_weight, last_used_at,
+               status, cooldown_until, retest_after, updated_at
+        FROM strategy_stats
+        ORDER BY dimension, value
+        """,
+        (),
+    )
+    return [
+        StrategyStat(
+            dimension=str(row[0]),
+            value=str(row[1]),
+            sample_count=int(row[2]),
+            weighted_score_14d=float(row[3]),
+            recent_score_7d=float(row[4]),
+            success_rate=float(row[5]),
+            current_weight=float(row[6]),
+            last_used_at=str(row[7]) if row[7] is not None else None,
+            status=str(row[8]),
+            cooldown_until=str(row[9]) if row[9] is not None else None,
+            retest_after=str(row[10]) if row[10] is not None else None,
+            updated_at=str(row[11]),
+        )
+        for row in rows
+    ]
+
+
+def _learning_check(config: AdaptiveConfig, stats: list[StrategyStat]) -> ReadinessCheck:
+    if not config.adaptive_enabled or not config.auto_schedule_enabled:
+        return ReadinessCheck(
+            "learning",
+            READY,
+            "adaptive scheduling disabled; deterministic baseline path expected",
+        )
+
+    category_stats = [stat for stat in stats if stat.dimension == "category"]
+    time_stats = [stat for stat in stats if stat.dimension == "time_bucket"]
+    category_ready = _learning_ready(category_stats)
+    time_ready = _time_learning_ready(time_stats)
+    if category_ready and time_ready:
+        return ReadinessCheck(
+            "learning",
+            READY,
+            "category and time-bucket learning meet planner maturity thresholds",
+        )
+
+    missing = []
+    if not category_ready:
+        missing.append("category")
+    if not time_ready:
+        missing.append("time_bucket")
+    return ReadinessCheck(
+        "learning",
+        DEGRADED,
+        "insufficient mature learning for: " + ", ".join(missing),
+    )
+
+
+def _parse_planned_for(value: str) -> datetime:
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        raise ValueError("planned_for timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _shadow_plan_check(
+    slots,
+    *,
+    plan_date,
+    config: AdaptiveConfig,
+    adaptive_planning: bool,
+) -> ReadinessCheck:
+    if not slots:
+        return ReadinessCheck("shadow_plan", FAILED, "planner emitted no slots")
+
+    slot_ids = [str(slot.slot_id) for slot in slots]
+    if len(set(slot_ids)) != len(slot_ids):
+        return ReadinessCheck("shadow_plan", FAILED, "planner emitted duplicate slot_id values")
+
+    parsed_times = []
+    local_schedule = []
+    for slot in slots:
+        if slot.action not in CORE_ACTIONS or slot.category not in CORE_ACTIONS:
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"planner emitted unknown action/category: {slot.action}/{slot.category}",
+            )
+        if slot.action != slot.category:
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"planner action/category mismatch: {slot.action}/{slot.category}",
+            )
+        if str(slot.plan_date) != plan_date.isoformat():
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"slot {slot.slot_id} has wrong plan_date {slot.plan_date}",
+            )
+        try:
+            planned_at = _parse_planned_for(slot.planned_for)
+        except (TypeError, ValueError) as error:
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"slot {slot.slot_id} has invalid planned_for: {error}",
+            )
+        local = planned_at.astimezone(VIETNAM_TZ)
+        hhmm = local.strftime("%H:%M")
+        if local.date() != plan_date or hhmm not in SAFE_TIME_BUCKETS:
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"slot {slot.slot_id} is outside safe Vietnam schedule: {local.isoformat()}",
+            )
+        if slot.status != "planned":
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"slot {slot.slot_id} has non-planned status {slot.status}",
+            )
+        if any(
+            value is not None
+            for value in (slot.claim_run_key, slot.claimed_at, slot.finished_at)
+        ):
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"slot {slot.slot_id} unexpectedly contains claim/finish metadata",
+            )
+        if slot.strategy_mode not in VALID_STRATEGY_MODES:
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                f"slot {slot.slot_id} has invalid strategy mode {slot.strategy_mode}",
+            )
+        if slot.strategy_mode != "baseline" and (
+            config.current_strategy_version is None
+            or slot.strategy_version != config.current_strategy_version
+        ):
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                (
+                    f"adaptive slot {slot.slot_id} must carry current strategy "
+                    f"v{config.current_strategy_version}"
+                ),
+            )
+        parsed_times.append(planned_at)
+        local_schedule.append(hhmm)
+
+    if len(set(parsed_times)) != len(parsed_times):
+        return ReadinessCheck(
+            "shadow_plan",
+            FAILED,
+            "planner emitted duplicate planned_for timestamps",
+        )
+    if parsed_times != sorted(parsed_times):
+        return ReadinessCheck(
+            "shadow_plan",
+            FAILED,
+            "planner output is not chronological",
+        )
+
+    baseline = config.baseline_daily_volume
+    if adaptive_planning:
+        lower = math.ceil(baseline * 0.80)
+        upper = max(lower, math.floor(baseline * 1.20))
+        if not lower <= len(slots) <= upper:
+            return ReadinessCheck(
+                "shadow_plan",
+                FAILED,
+                (
+                    f"adaptive volume {len(slots)} violates planner guardrail "
+                    f"[{lower}, {upper}]"
+                ),
+            )
+    elif len(slots) != baseline:
+        return ReadinessCheck(
+            "shadow_plan",
+            FAILED,
+            f"baseline fallback emitted {len(slots)} slots; expected {baseline}",
+        )
+
+    return ReadinessCheck(
+        "shadow_plan",
+        READY,
+        (
+            f"{len(slots)} unique safe slots for {plan_date.isoformat()}: "
+            + ", ".join(local_schedule)
+        ),
+    )
+
+
 def run_core_checks(execute_fn) -> list[ReadinessCheck]:
     checks = []
     schema = _schema_check(execute_fn)
@@ -602,3 +816,58 @@ def run_core_checks(execute_fn) -> list[ReadinessCheck]:
     checks.append(_strategy_stats_check(execute_fn))
     checks.append(_style_registry_check(execute_fn))
     return checks
+
+
+def run_readiness(
+    execute_fn,
+    *,
+    now: datetime | None = None,
+    planner_fn=build_daily_plan,
+) -> ReadinessResult:
+    """Validate production state and build one in-memory next-day shadow plan."""
+    checks = run_core_checks(execute_fn)
+    if aggregate_checks(checks) == FAILED:
+        return ReadinessResult(FAILED, tuple(checks))
+
+    config_check, config = _config_check(execute_fn)
+    if config is None:
+        checks.append(config_check)
+        return ReadinessResult(FAILED, tuple(checks))
+
+    stats = _load_strategy_stats(execute_fn)
+    learning = _learning_check(config, stats)
+    checks.append(learning)
+
+    current = _as_utc(now)
+    plan_date = current.astimezone(VIETNAM_TZ).date() + timedelta(days=1)
+    category_stats = [stat for stat in stats if stat.dimension == "category"]
+    time_stats = [stat for stat in stats if stat.dimension == "time_bucket"]
+    adaptive_planning = (
+        config.adaptive_enabled
+        and config.auto_schedule_enabled
+        and _learning_ready(category_stats)
+    )
+
+    try:
+        slots = planner_fn(
+            plan_date,
+            config,
+            category_stats,
+            time_stats,
+            now=current,
+        )
+        shadow = _shadow_plan_check(
+            slots,
+            plan_date=plan_date,
+            config=config,
+            adaptive_planning=adaptive_planning,
+        )
+    except Exception as error:
+        shadow = ReadinessCheck(
+            "shadow_plan",
+            FAILED,
+            f"shadow planner failed: {error}",
+        )
+    checks.append(shadow)
+
+    return ReadinessResult(aggregate_checks(checks), tuple(checks))
