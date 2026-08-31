@@ -45,7 +45,10 @@ class StrategyGuardWiringTests(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.detail, "healthy")
-        guard.assert_called_once_with(hardening_runner.db.execute)
+        guard.assert_called_once_with(
+            hardening_runner.db.execute,
+            transaction_fn=hardening_runner.db.execute_transaction,
+        )
 
     def test_normal_guard_noop_states_are_skipped(self):
         for status in (
