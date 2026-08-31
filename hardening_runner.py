@@ -108,10 +108,6 @@ def _adaptive_before_publish(action: str):
         try:
             style_target = style_steering.select_style_target(db.execute)
         except Exception as error:
-            # Style steering is an optimization layer. If strategy state is
-            # temporarily unavailable, keep the mandatory dedup + quality gate
-            # active instead of turning an optional optimization into a publish
-            # outage.
             print(f"⚠️ Style steering unavailable; using unsteered draft: {error}")
             style_target = None
         return prepublish_guard.evaluate_request(
@@ -246,7 +242,7 @@ def _strategy_guard_job() -> JobOutcome:
     if result.status == "rolled_back":
         _send_strategy_rollback_alert(result)
         return success(result.detail or result.status)
-    raise RuntimeError(result.detail or f"strategy guard failed: {result.status}")
+    raise RuntimeError(f"strategy guard failed: {result.detail or result.status}")
 
 
 def resolve_jobs(dispatch_run_key: str | None = None) -> dict[str, Callable[[], object]]:
