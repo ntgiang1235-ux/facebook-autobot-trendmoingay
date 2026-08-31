@@ -75,6 +75,12 @@ After applying weights:
 - save a new `StrategySnapshot` with reason `automatic rollback to v<target>`;
 - save config with `current_strategy_version=<rollback version>` and unchanged `last_good_strategy_version=<target>`.
 
+### Atomic persistence
+
+The rollback mutation is one Turso transaction on one connection. All restored `strategy_stats` rows, the append-only rollback `strategy_versions` snapshot, and the `adaptive_config` pointer update commit together or roll back together. A statement failure must never leave the planner with a partially restored strategy.
+
+The transaction helper retains the existing transient Turso retry policy. Because a retry may re-enter the rollback callback, the callback checks the intended rollback version before inserting it: an already-existing identical rollback snapshot is accepted, while a conflicting snapshot at the same version fails closed instead of overwriting history.
+
 No schema-destructive migration or new external dependency is required.
 
 ## Hardened daily orchestration
@@ -113,5 +119,7 @@ TDD coverage must prove:
 - feedback refresh preserves last-good instead of overwriting it;
 - rollback restores known weights, zeros unknown values, and does not revive suspended/retired values;
 - rollback creates a new append-only strategy version and preserves the target last-good pointer;
+- rollback mutations commit atomically and statement failure rolls the whole transaction back;
+- hardening runner passes the production transaction helper into the strategy guard;
 - hardening runner and workflow schedule `strategy_guard` between learn and planner;
 - full unit suite and compile gate remain green.
