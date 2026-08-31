@@ -87,6 +87,45 @@ class StyleExperimentSteeringTests(unittest.TestCase):
     @patch("app.style_steering.ensure_seed_styles")
     @patch("app.style_steering.load_stats")
     @patch("app.style_steering.load_config")
+    def test_pending_experiment_uses_noncustom_controls(
+        self, load_config, load_stats, _seed, list_styles
+    ):
+        from app.style_steering import select_style_target
+
+        load_config.return_value = AdaptiveConfig(exploration_rate=0.20)
+        load_stats.return_value = [
+            stat("hook_type", "number_with_tension", 0.9),
+            stat("hook_type", "number", 0.1),
+            stat("style_type", "witty"),
+            stat("cta_type", "opinion_question"),
+        ]
+        registry = {
+            "hook": [
+                variant(1, "hook", "number", "baseline"),
+                variant(8, "hook", "number_with_tension", "active", "number"),
+            ],
+            "tone": [
+                variant(2, "tone", "witty", "baseline"),
+                variant(9, "tone", "witty_short_punchline", "explore", "witty"),
+            ],
+            "cta": [variant(3, "cta", "opinion_question", "baseline")],
+        }
+        list_styles.side_effect = lambda _execute, dimension: registry[dimension]
+
+        target = select_style_target(
+            lambda *_: [],
+            FakeRng([0.10, 0.0, 0.0, 0.0]),
+        )
+
+        self.assertEqual(target.experiment_key, "tone:witty_short_punchline")
+        self.assertEqual(target.hook_type, "number")
+        self.assertEqual(target.style_type, "witty_short_punchline")
+        self.assertEqual(target.cta_type, "opinion_question")
+
+    @patch("app.style_steering.list_active_styles")
+    @patch("app.style_steering.ensure_seed_styles")
+    @patch("app.style_steering.load_stats")
+    @patch("app.style_steering.load_config")
     def test_exploit_mode_never_uses_pending_experiment(
         self, load_config, load_stats, _seed, list_styles
     ):
@@ -143,6 +182,46 @@ class StyleExperimentSteeringTests(unittest.TestCase):
         self.assertEqual(target.mode, "exploit")
         self.assertEqual(target.style_type, "witty_short_punchline")
         self.assertEqual(target.experiment_key, "tone:witty_short_punchline")
+
+    @patch("app.style_steering.list_active_styles")
+    @patch("app.style_steering.ensure_seed_styles")
+    @patch("app.style_steering.load_stats")
+    @patch("app.style_steering.load_config")
+    def test_exploit_limits_multiple_promoted_customs_to_one_treatment(
+        self, load_config, load_stats, _seed, list_styles
+    ):
+        from app.style_steering import select_style_target
+
+        load_config.return_value = AdaptiveConfig(exploration_rate=0.20)
+        load_stats.return_value = [
+            stat("hook_type", "number_with_tension", 0.9),
+            stat("hook_type", "number", 0.1),
+            stat("style_type", "witty_short_punchline", 0.9),
+            stat("style_type", "witty", 0.1),
+            stat("cta_type", "opinion_question", 1.0),
+        ]
+        registry = {
+            "hook": [
+                variant(1, "hook", "number", "baseline"),
+                variant(8, "hook", "number_with_tension", "active", "number"),
+            ],
+            "tone": [
+                variant(2, "tone", "witty", "baseline"),
+                variant(9, "tone", "witty_short_punchline", "active", "witty"),
+            ],
+            "cta": [variant(3, "cta", "opinion_question", "baseline")],
+        }
+        list_styles.side_effect = lambda _execute, dimension: registry[dimension]
+
+        target = select_style_target(
+            lambda *_: [],
+            FakeRng([0.90, 0.0, 0.0, 0.0, 0.0]),
+        )
+
+        self.assertEqual(target.experiment_key, "hook:number_with_tension")
+        self.assertEqual(target.hook_type, "number_with_tension")
+        self.assertEqual(target.style_type, "witty")
+        self.assertEqual(target.cta_type, "opinion_question")
 
     @patch("app.style_steering.list_active_styles")
     @patch("app.style_steering.ensure_seed_styles")
