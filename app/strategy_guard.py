@@ -94,24 +94,24 @@ def _next_version_id(execute_fn) -> int:
     return int(rows[0][0]) + 1 if rows else 1
 
 
-def _effective_rollback_weights(execute_fn, target: StrategySnapshot, current: datetime):
+def _restored_stats(execute_fn, target: StrategySnapshot, current: datetime):
     stats = load_stats(execute_fn)
+    restored = []
     effective: dict[str, dict[str, float]] = {}
     for stat in stats:
         target_weight = target.weights.get(stat.dimension, {}).get(stat.value, 0.0)
         restored_weight = (
             0.0 if stat.status in {"retired", "suspended"} else float(target_weight)
         )
-        upsert_stat(
-            execute_fn,
+        restored.append(
             replace(
                 stat,
                 current_weight=restored_weight,
                 updated_at=current.isoformat(),
-            ),
+            )
         )
         effective.setdefault(stat.dimension, {})[stat.value] = restored_weight
-    return effective
+    return restored, effective
 
 
 def _empty_evidence(start: datetime, end: datetime) -> StrategyEvidence:
@@ -125,7 +125,12 @@ def _empty_evidence(start: datetime, end: datetime) -> StrategyEvidence:
     )
 
 
-def run_strategy_guard(execute_fn, *, now: datetime | None = None) -> StrategyGuardResult:
+def run_strategy_guard(
+    execute_fn,
+    *,
+    transaction_fn=None,
+    now: datetime | None = None,
+) -> StrategyGuardResult:
     """Promote a healthy current strategy or rollback a decisive regression."""
     current = _as_utc(now)
     prior_start, prior_end, recent_start, recent_end = _windows(current)
@@ -239,25 +244,43 @@ def run_strategy_guard(execute_fn, *, now: datetime | None = None) -> StrategyGu
             detail=f"last-good strategy v{target_version} snapshot is unavailable",
         )
 
-    effective_weights = _effective_rollback_weights(execute_fn, target, current)
+    restored_stats, effective_weights = _restored_stats(execute_fn, target, current)
     rollback_version = _next_version_id(execute_fn)
     rollback_config = replace(
         config,
         current_strategy_version=rollback_version,
         last_good_strategy_version=target_version,
     )
-    save_strategy_version(
-        execute_fn,
-        StrategySnapshot(
-            version_id=rollback_version,
-            weights=effective_weights,
-            config=rollback_config,
-            created_at=current.isoformat(),
-            reason=f"automatic rollback to v{target_version}",
-            is_last_good=False,
-        ),
+    rollback_snapshot = StrategySnapshot(
+        version_id=rollback_version,
+        weights=effective_weights,
+        config=rollback_config,
+        created_at=current.isoformat(),
+        reason=f"automatic rollback to v{target_version}",
+        is_last_good=False,
     )
-    save_config(execute_fn, rollback_config)
+
+    def persist_rollback(transaction_execute):
+        existing = load_strategy_version(transaction_execute, rollback_version)
+        if existing is not None and (
+            existing.reason != rollback_snapshot.reason
+            or existing.weights != rollback_snapshot.weights
+        ):
+            raise RuntimeError(
+                f"strategy rollback version collision at v{rollback_version}"
+            )
+        for stat in restored_stats:
+            upsert_stat(transaction_execute, stat)
+        if existing is None:
+            save_strategy_version(transaction_execute, rollback_snapshot)
+        save_config(transaction_execute, rollback_config)
+
+    if transaction_fn is None:
+        # Test/backward-compatible callers may provide an in-memory executor.
+        # Production hardening always supplies db.execute_transaction.
+        persist_rollback(execute_fn)
+    else:
+        transaction_fn(persist_rollback)
 
     return StrategyGuardResult(
         status="rolled_back",
