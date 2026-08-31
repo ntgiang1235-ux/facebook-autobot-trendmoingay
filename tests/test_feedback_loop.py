@@ -117,7 +117,7 @@ class AdaptiveFeedbackLoopTests(unittest.TestCase):
             (post_id, (published_at + timedelta(hours=72)).isoformat(), score),
         )
 
-    def test_refresh_updates_real_stats_bounded_weights_and_creates_version(self):
+    def test_refresh_updates_real_stats_bounded_weights_and_creates_unproven_version(self):
         from app.feedback_loop import refresh_strategy
 
         now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
@@ -154,13 +154,13 @@ class AdaptiveFeedbackLoopTests(unittest.TestCase):
         [config_row] = self.execute(
             "SELECT current_strategy_version, last_good_strategy_version FROM adaptive_config WHERE id=1"
         )
-        self.assertEqual(config_row, (1, 1))
+        self.assertEqual(config_row, (1, None))
         [version_row] = self.execute(
             "SELECT version_id, reason, is_last_good FROM strategy_versions"
         )
         self.assertEqual(version_row[0], 1)
         self.assertIn("14-day", version_row[1])
-        self.assertEqual(version_row[2], 1)
+        self.assertEqual(version_row[2], 0)
 
     def test_second_refresh_same_vietnam_day_does_not_compound_weights(self):
         from app.feedback_loop import refresh_strategy
