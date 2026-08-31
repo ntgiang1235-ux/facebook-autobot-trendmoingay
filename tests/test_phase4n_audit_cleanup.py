@@ -116,7 +116,7 @@ class Phase4NAuditCleanupTests(unittest.TestCase):
         )
         self.assertIn("CTA: opinion_question 76.0", build_weekly_report(data, "2026-08-31"))
 
-    def test_promoting_current_strategy_synchronizes_last_good_audit_flags(self):
+    def test_promoting_current_strategy_preserves_append_only_snapshot_flags(self):
         from app.strategy_guard import run_strategy_guard
 
         now = datetime(2026, 9, 1, 0, 32, tzinfo=timezone.utc)
@@ -214,11 +214,15 @@ class Phase4NAuditCleanupTests(unittest.TestCase):
             flags = conn.execute(
                 "SELECT version_id, is_last_good FROM strategy_versions ORDER BY version_id"
             ).fetchall()
+            pointer = conn.execute(
+                "SELECT last_good_strategy_version FROM adaptive_config WHERE id = 1"
+            ).fetchone()[0]
         finally:
             conn.close()
 
         self.assertEqual(result.status, "promoted_last_good")
-        self.assertEqual(flags, [(1, 0), (2, 1)])
+        self.assertEqual(pointer, 2)
+        self.assertEqual(flags, [(1, 1), (2, 0)])
 
 
 if __name__ == "__main__":
