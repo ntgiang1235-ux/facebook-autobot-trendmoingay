@@ -18,7 +18,7 @@ DEGRADED = "degraded"
 FAILED = "failed"
 
 REQUIRED_COLUMNS = {
-    "job_runs": set(),
+    "job_runs": {"action", "status", "started_at"},
     "content_posts": {
         "facebook_post_id",
         "category",
