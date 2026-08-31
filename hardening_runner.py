@@ -57,6 +57,12 @@ ADAPTIVE_CONTENT_ACTIONS = (
     "recipe",
     "video",
 )
+STALE_TOLERANT_MAINTENANCE_ACTIONS = {
+    "learn",
+    "strategy_guard",
+    "style_evolve",
+    "planner",
+}
 
 
 def utc_now_iso() -> str:
@@ -383,7 +389,9 @@ def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None)
         meta.delay_minutes,
     )
 
-    if meta.stale:
+    # Maintenance actions are safe to execute late: they do not publish content
+    # directly and already have idempotency/data-maturity guards of their own.
+    if meta.stale and action not in STALE_TOLERANT_MAINTENANCE_ACTIONS:
         finished_at = utc_now_iso()
         detail = f"stale schedule: delayed {meta.delay_minutes} minutes"
         db.record_job(
