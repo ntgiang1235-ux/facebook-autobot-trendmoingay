@@ -1,10 +1,10 @@
 # Automatic Strategy Rollback Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for completed work.
 
 **Goal:** Detect >20% regression in mature adaptive Facebook performance, preserve a proven last-good strategy, and restore its weights before daily planning.
 
-**Architecture:** Add a focused `strategy_guard` module that loads two adjacent 7-day mature cohorts, applies evidence/coverage gates, promotes healthy current strategy versions, or restores a last-good snapshot by creating a new rollback version. Modify feedback refresh so it no longer marks every daily version last-good, then wire the guard into the hardened runner and production workflow between learning and planning.
+**Architecture:** Add a focused `strategy_guard` module that loads two adjacent 7-day mature cohorts, applies evidence/coverage gates, promotes healthy current strategy versions, or restores a last-good snapshot by creating a new rollback version. Modify feedback refresh so it no longer marks every daily version last-good, then wire the guard into the hardened runner and production workflow between learning and planning. Rollback persistence uses one Turso transaction so strategy rows, snapshot, and config move atomically.
 
 **Tech Stack:** Python 3.11, unittest, Turso/libSQL, GitHub Actions, Telegram notifications.
 
@@ -20,6 +20,7 @@
 - Only adaptive published posts with non-null `strategy_version` count.
 - No destructive schema migration and no new external dependency.
 - Existing hardening semantics remain: state/database failures fail non-zero; observability failures do not undo a persisted rollback.
+- Rollback state mutation is atomic: partial strategy restoration is not allowed.
 
 ---
 
@@ -28,36 +29,31 @@
 **Files:**
 - Create: `app/strategy_guard.py`
 - Create: `tests/test_strategy_guard.py`
+- Create: `tests/test_db_transaction.py`
+- Modify: `app/db.py`
 
-**Interfaces:**
-- Produces: `StrategyGuardResult` and `run_strategy_guard(execute_fn, *, now=None) -> StrategyGuardResult`.
-- Uses existing `load_config`, `save_config`, `load_stats`, `load_strategy_version`, `upsert_stat`, and `save_strategy_version` repository functions.
-
-- [ ] **Step 1: Write failing evidence tests** for exact mature-window boundaries, adaptive-only filtering, minimum sample gate, and 80% coverage gate.
-- [ ] **Step 2: Run `python -m unittest tests.test_strategy_guard -v` and verify RED** because `app.strategy_guard` does not exist.
-- [ ] **Step 3: Implement cohort loading** with `recent_end = now - 72h`, two adjacent 7-day windows, one aggregate query per window, and a typed evidence dataclass.
-- [ ] **Step 4: Write failing decision tests** proving 20% exactly is not rollback, >20% is rollback, disabled adaptive skips, missing last-good skips, and healthy evidence promotes current to last-good.
-- [ ] **Step 5: Implement deterministic decision logic** without persistence shortcuts or Gemini calls.
-- [ ] **Step 6: Write failing rollback persistence tests** proving known weights restore, missing values become zero, suspended/retired remain zero, a new version is appended, and the target last-good pointer is preserved.
-- [ ] **Step 7: Implement minimal rollback persistence** using existing strategy snapshot/config storage and current strategy rows.
-- [ ] **Step 8: Run `python -m unittest tests.test_strategy_guard -v` and verify GREEN.**
-- [ ] **Step 9: Commit** with message `feat: add automatic strategy rollback guard`.
+- [x] **Step 1:** Write RED evidence tests for mature-window boundaries, adaptive-only filtering, minimum sample gate, and 80% coverage gate.
+- [x] **Step 2:** Verify RED with only new strategy-guard failures.
+- [x] **Step 3:** Implement adjacent 7-day cohort loading delayed by the 72-hour final-metric horizon.
+- [x] **Step 4:** Add RED decision tests for exact 20%, >20%, disabled adaptive, missing last-good, and healthy promotion.
+- [x] **Step 5:** Implement deterministic decision logic.
+- [x] **Step 6:** Add rollback persistence tests for restored/zeroed/safety weights and append-only versioning.
+- [x] **Step 7:** Implement rollback persistence.
+- [x] **Step 8:** During review, add RED transaction tests proving one connection/commit and whole-transaction rollback on statement failure.
+- [x] **Step 9:** Add `db.execute_transaction()` and move all rollback writes into one retry-safe transaction callback.
+- [x] **Step 10:** Verify GREEN for strategy-guard and transaction behavior.
 
 ### Task 2: Preserve last-good across daily learning refresh
 
 **Files:**
 - Modify: `app/feedback_loop.py`
 - Modify: `tests/test_feedback_idempotency.py`
-- Modify: `tests/test_feedback_loop.py` only if snapshot assertions require it.
+- Modify: `tests/test_feedback_loop.py`
 
-**Interfaces:**
-- `refresh_strategy()` continues to create/repair `current_strategy_version` but must preserve `last_good_strategy_version` unchanged.
-
-- [ ] **Step 1: Change tests first** so same-day config repair sets only `current_strategy_version=latest`, preserving the prior last-good pointer, and new daily snapshots do not overwrite last-good.
-- [ ] **Step 2: Run focused feedback tests and verify RED** against the existing behavior that sets last-good to latest.
-- [ ] **Step 3: Implement minimal feedback changes**: preserve `config.last_good_strategy_version` in same-day repair and new-version config; new adaptive snapshots are not automatically declared last-good.
-- [ ] **Step 4: Run `python -m unittest tests.test_feedback_idempotency tests.test_feedback_loop -v` and verify GREEN.**
-- [ ] **Step 5: Commit** with message `fix: preserve proven last-good strategy during learning`.
+- [x] **Step 1:** Change tests first so same-day repair updates only `current_strategy_version` and preserves the proven last-good pointer.
+- [x] **Step 2:** Verify RED against the old behavior that marked each latest strategy last-good.
+- [x] **Step 3:** Preserve `last_good_strategy_version` during same-day repair and new daily version creation; mark new snapshots `is_last_good=False`.
+- [x] **Step 4:** Verify focused feedback tests GREEN.
 
 ### Task 3: Hardened runner, Telegram alert, and production schedule
 
@@ -67,25 +63,28 @@
 - Modify: `tests/test_hardening_runner.py`
 - Create: `tests/test_strategy_guard_wiring.py`
 
-**Interfaces:**
-- Add action `strategy_guard`.
-- `resolve_jobs()` routes it through `strategy_guard.run_strategy_guard(db.execute)`.
-- Outcome mapping: normal no-op states -> `skipped` or `success` per spec; rollback -> `success` and best-effort `notifications.send_message` alert; unknown/failure states -> exception.
-- Production cron: `32 0 * * *`, after `learn` (`27 0 * * *`) and before Sunday `style_evolve` (`37 0 * * 0`) / daily planner (`47 0 * * *`).
-
-- [ ] **Step 1: Write failing wiring tests** for action registration, job routing, outcome mapping, rollback alert, and exact workflow cron/order.
-- [ ] **Step 2: Run focused wiring tests and verify RED.**
-- [ ] **Step 3: Implement hardened adapter** without changing operational content jobs.
-- [ ] **Step 4: Add manual workflow option, daily cron, and schedule mapping** for `strategy_guard`.
-- [ ] **Step 5: Run focused wiring/hardening/workflow tests and verify GREEN.**
-- [ ] **Step 6: Commit** with message `feat: schedule automatic strategy guard`.
+- [x] **Step 1:** Write RED wiring tests for action registration, routing, outcome mapping, rollback alert, exact cron/order, and atomic transaction injection.
+- [x] **Step 2:** Verify RED without unrelated regressions.
+- [x] **Step 3:** Implement hardened outcome adapter and best-effort rollback Telegram alert.
+- [x] **Step 4:** Route production rollback through `db.execute_transaction`.
+- [x] **Step 5:** Add manual workflow option, daily `32 0 * * *` cron, and schedule mapping.
+- [x] **Step 6:** Verify wiring/hardening/workflow tests GREEN.
 
 ### Task 4: Verification and pull request
 
-**Files:** no production changes expected.
+- [x] **Step 1:** Run full unit suite through PR CI.
+- [x] **Step 2:** Run Python compile gate through PR CI.
+- [ ] **Step 3:** Review final branch diff against `main` and confirm it is limited to Phase 4M scope.
+- [x] **Step 4:** Open PR #21 against `main` with Phase 4M scope.
+- [ ] **Step 5:** Require green CI on the final documentation HEAD before presenting the merge decision.
 
-- [ ] **Step 1: Run full unit suite:** `python -m unittest discover -s tests -v`.
-- [ ] **Step 2: Run compile gate:** `python -m compileall -q .`.
-- [ ] **Step 3: Review branch diff against `main`** and confirm it is limited to Phase 4M scope.
-- [ ] **Step 4: Open PR against `main`** summarizing thresholds, last-good semantics, schedule order, and verification evidence.
-- [ ] **Step 5: Require green PR CI before presenting merge decision.**
+## Verification evidence so far
+
+- Initial strategy-guard RED: CI #290 — old suite passed; 8 new missing-module errors only.
+- Strategy-guard GREEN: CI #291.
+- Last-good semantics RED: CI #293 — 3 intended failures only.
+- Last-good semantics GREEN: CI #294.
+- Hardened wiring RED: CI #296 — intended wiring failures only.
+- Initial wiring GREEN after contract fix: CI #299.
+- Atomic rollback RED: CI #301 — exactly 3 new missing-transaction errors; all other tests passed.
+- Atomic rollback GREEN: CI #304 — **309 tests passed** and Python compile gate passed.
