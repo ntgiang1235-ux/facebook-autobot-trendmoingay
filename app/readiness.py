@@ -776,6 +776,8 @@ def _liveness_check(
         FROM content_posts
         WHERE status = 'published'
           AND facebook_post_id IS NOT NULL
+          AND strategy_mode IN ('baseline', 'exploit', 'explore', 'retest')
+          AND scheduled_for IS NOT NULL
           AND published_at >= ?
           AND published_at < ?
         """,
