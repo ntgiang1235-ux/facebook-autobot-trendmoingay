@@ -21,6 +21,7 @@ from app import (
     reporting,
     scheduler,
     style_evolution,
+    style_experiment_lifecycle,
     style_steering,
 )
 from app.http import secure_session_from
@@ -162,19 +163,45 @@ def _video_publish_callback(**metadata) -> None:
 
 
 def _style_evolution_job() -> JobOutcome:
+    lifecycle = style_experiment_lifecycle.review_pending_experiment(db.execute)
+    blocked_lifecycle = {
+        "insufficient_experiment_data",
+        "insufficient_parent_data",
+        "kept_explore",
+    }
+    decisive_lifecycle = {"promoted", "retired"}
+
+    if lifecycle.status in blocked_lifecycle:
+        return skipped(lifecycle.detail or lifecycle.status)
+    if lifecycle.status not in decisive_lifecycle | {"no_pending"}:
+        raise RuntimeError(
+            lifecycle.detail or f"unknown style lifecycle status: {lifecycle.status}"
+        )
+
     result = style_evolution.generate_next_experiment(
         db.execute,
         autobot.call_gemini,
     )
-    if result.status == "created":
-        return success(result.detail)
-    if result.status in {
+    normal_noop = {
         "pending_existing",
         "insufficient_data",
         "invalid_variant",
         "duplicate_variant",
-    }:
+    }
+
+    if result.status == "created":
+        if lifecycle.status in decisive_lifecycle:
+            return success(f"{lifecycle.detail or lifecycle.status}; {result.detail}")
+        return success(result.detail)
+
+    if result.status in normal_noop:
+        if lifecycle.status in decisive_lifecycle:
+            return success(
+                f"{lifecycle.detail or lifecycle.status}; "
+                f"{result.detail or result.status}"
+            )
         return skipped(result.detail or result.status)
+
     raise RuntimeError(result.detail or f"style evolution failed: {result.status}")
 
 

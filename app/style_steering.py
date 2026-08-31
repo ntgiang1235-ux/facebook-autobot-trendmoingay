@@ -42,13 +42,43 @@ def _mature_active(stats: list[StrategyStat], dimension: str) -> list[StrategySt
     ]
 
 
-def _weighted_mature_choice(stats: list[StrategyStat], dimension: str, rng) -> str | None:
+def _weighted_mature_choice(
+    stats: list[StrategyStat],
+    dimension: str,
+    rng,
+    *,
+    allowed_values: set[str] | None = None,
+) -> str | None:
     mature = _mature_active(stats, dimension)
+    if allowed_values is not None:
+        mature = [stat for stat in mature if stat.value in allowed_values]
     if not mature:
         return None
     return weighted_choice(
         [(stat.value, max(0.0, float(stat.current_weight))) for stat in mature],
         rng,
+    )
+
+
+def _baseline_values(registered) -> set[str]:
+    return {
+        item.value
+        for item in registered
+        if item.status != "retired" and item.parent_value is None
+    }
+
+
+def _baseline_mature_choice(
+    stats: list[StrategyStat],
+    stat_dimension: str,
+    registered,
+    rng,
+) -> str | None:
+    return _weighted_mature_choice(
+        stats,
+        stat_dimension,
+        rng,
+        allowed_values=_baseline_values(registered),
     )
 
 
@@ -85,6 +115,51 @@ def _pending_experiments(registered_by_dimension):
     return pending
 
 
+def _selected_customs(values, registered_by_dimension):
+    selected = []
+    for stat_dimension, registry_dimension in _DIMENSIONS:
+        selected_value = values.get(stat_dimension)
+        if selected_value is None:
+            continue
+        item = next(
+            (
+                candidate
+                for candidate in registered_by_dimension[registry_dimension]
+                if candidate.value == selected_value
+                and candidate.status == "active"
+                and candidate.parent_value is not None
+            ),
+            None,
+        )
+        if item is not None:
+            selected.append((stat_dimension, registry_dimension, item))
+    return selected
+
+
+def _limit_to_one_custom_treatment(
+    stats: list[StrategyStat],
+    values: dict[str, str | None],
+    registered_by_dimension,
+    rng,
+) -> tuple[dict[str, str | None], str | None]:
+    customs = _selected_customs(values, registered_by_dimension)
+    if not customs:
+        return values, None
+
+    kept_stat_dimension, kept_registry_dimension, kept_item = customs[0]
+    normalized = dict(values)
+    for stat_dimension, registry_dimension, _item in customs[1:]:
+        normalized[stat_dimension] = _baseline_mature_choice(
+            stats,
+            stat_dimension,
+            registered_by_dimension[registry_dimension],
+            rng,
+        )
+
+    key = f"{kept_registry_dimension}:{kept_item.value}"
+    return normalized, key
+
+
 def _experiment_target(stats, registered_by_dimension, rng) -> StyleTarget | None:
     pending = _pending_experiments(registered_by_dimension)
     if not pending:
@@ -102,9 +177,14 @@ def _experiment_target(stats, registered_by_dimension, rng) -> StyleTarget | Non
         stat_dimension: (
             chosen_value
             if stat_dimension == chosen_stat_dimension
-            else _weighted_mature_choice(stats, stat_dimension, rng)
+            else _baseline_mature_choice(
+                stats,
+                stat_dimension,
+                registered_by_dimension[registry_dimension],
+                rng,
+            )
         )
-        for stat_dimension, _ in _DIMENSIONS
+        for stat_dimension, registry_dimension in _DIMENSIONS
     }
     return StyleTarget(
         hook_type=values["hook_type"],
@@ -116,13 +196,14 @@ def _experiment_target(stats, registered_by_dimension, rng) -> StyleTarget | Non
 
 
 def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
-    """Select a mature profile, exposing at most one controlled experiment.
+    """Select a mature profile while isolating one custom treatment per post.
 
-    One exploit/explore mode applies to the whole profile. Exploitation only uses
-    mature active strategy values. During exploration, a pending custom experiment
-    gets priority and changes exactly one dimension; the other dimensions use
-    mature winners as controls. If no custom experiment is pending, exploration
-    falls back to approved registered under-sampled values as before.
+    One exploit/explore mode applies to the whole profile. A pending experiment
+    changes exactly one dimension and uses non-custom mature controls elsewhere.
+    Promoted custom variants retain their treatment key when later selected, and
+    if multiple promoted customs would otherwise be combined, only the first
+    selected dimension is kept custom while the others fall back to mature
+    baseline controls. This keeps learning attribution unambiguous.
     """
     config = load_config(execute_fn)
     if not config.adaptive_enabled:
@@ -139,9 +220,9 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
     ensure_seed_styles(execute_fn)
     generator = rng or random.SystemRandom()
     mode = select_mode(generator, config.exploration_rate)
+    registered_by_dimension = _registered_by_dimension(execute_fn)
 
     if mode == "explore":
-        registered_by_dimension = _registered_by_dimension(execute_fn)
         experiment = _experiment_target(stats, registered_by_dimension, generator)
         if experiment is not None:
             return experiment
@@ -163,11 +244,19 @@ def select_style_target(execute_fn, rng=None) -> StyleTarget | None:
 
     if not any(values.values()):
         return None
+
+    values, treatment_key = _limit_to_one_custom_treatment(
+        stats,
+        values,
+        registered_by_dimension,
+        generator,
+    )
     return StyleTarget(
         hook_type=values["hook_type"],
         style_type=values["style_type"],
         cta_type=values["cta_type"],
         mode=mode,
+        experiment_key=treatment_key,
     )
 
 
