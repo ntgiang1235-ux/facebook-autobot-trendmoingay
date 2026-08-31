@@ -240,7 +240,9 @@ The resulting in-memory slots must satisfy:
 - no claim/finished metadata is populated;
 - strategy mode is one of `baseline`, `exploit`, `explore`, `retest`;
 - if a slot is adaptive rather than baseline, it carries the current strategy version;
-- produced volume is within planner output capacity and consistent with the planner's own baseline/adaptive guardrails.
+- slot count must never exceed `len(SAFE_TIME_BUCKETS)`;
+- when adaptive category learning is active, slot count must stay inside the existing `target_daily_volume()` ±20% band around `baseline_daily_volume`;
+- when planner falls back to baseline, a configured baseline volume that exceeds the available baseline template capacity is a failed configuration rather than silently accepting a shorter shadow plan.
 
 The verifier records the planned slot count and local schedule in output only. It does not call `plan_repository.save_slots()`.
 
