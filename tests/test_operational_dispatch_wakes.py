@@ -69,6 +69,54 @@ class OperationalDispatchWakeTests(unittest.TestCase):
         self.assertEqual(dispatch_actions[0][2], "started")
         self.assertEqual(dispatch_actions[1][2], "skipped")
 
+    def test_scheduled_primary_still_runs_when_opportunistic_dispatch_fails(self):
+        primary = Mock(return_value=success("metrics ok"))
+        jobs = jobs_with_primary("metrics", primary)
+        records = []
+        meta = SimpleNamespace(
+            scheduled_for=self.scheduled_for,
+            delay_minutes=8,
+            stale=False,
+        )
+
+        with patch.object(hardening_runner.db, "ensure_schema"), patch.object(
+            hardening_runner.db,
+            "record_job",
+            side_effect=lambda *args: records.append(args),
+        ), patch.object(
+            hardening_runner.scheduler,
+            "schedule_metadata",
+            return_value=meta,
+        ), patch.object(
+            hardening_runner.dispatcher,
+            "dispatch_due",
+            side_effect=RuntimeError("facebook down"),
+        ) as dispatch, patch.object(
+            hardening_runner.notifications,
+            "send_failure",
+        ) as send_failure, patch.object(
+            hardening_runner,
+            "utc_now_iso",
+            side_effect=["primary-start", "dispatch-start", "dispatch-finish", "primary-finish"],
+        ), patch.dict(
+            os.environ,
+            {
+                "GITHUB_EVENT_NAME": "schedule",
+                "GITHUB_RUN_ID": "wake-fail-1",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "SCHEDULED_CRON": "17 9 * * *",
+            },
+            clear=False,
+        ):
+            outcome = hardening_runner.run_action("metrics", jobs=jobs)
+
+        self.assertEqual(outcome.status, "success")
+        primary.assert_called_once_with()
+        dispatch.assert_called_once()
+        dispatch_actions = [record for record in records if record[1] == "dispatch"]
+        self.assertEqual([record[2] for record in dispatch_actions], ["started", "failed"])
+        send_failure.assert_called_once()
+
     def test_manual_non_dispatch_action_never_publishes_opportunistically(self):
         primary = Mock(return_value=success("health ok"))
         jobs = jobs_with_primary("health", primary)
