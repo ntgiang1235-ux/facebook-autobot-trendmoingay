@@ -444,12 +444,21 @@ def run_action(action: str, jobs: dict[str, Callable[[], object]] | None = None)
     # Manual actions never gain this publishing side effect, and the explicit
     # dispatcher action is already the single intended dispatch attempt.
     if os.getenv("GITHUB_EVENT_NAME", "").strip() == "schedule" and action != "dispatch":
-        _run_opportunistic_dispatch(
-            jobs,
-            parent_run_key=run_key,
-            scheduled_for=scheduled_for,
-            delay_minutes=meta.delay_minutes,
-        )
+        try:
+            _run_opportunistic_dispatch(
+                jobs,
+                parent_run_key=run_key,
+                scheduled_for=scheduled_for,
+                delay_minutes=meta.delay_minutes,
+            )
+        except Exception as dispatch_error:
+            # The secondary dispatch has already recorded its own failed status
+            # and sent its own failure alert. Preserve the primary scheduled job
+            # so one Facebook outage cannot suppress health/metrics/learning.
+            print(
+                "⚠️ Opportunistic dispatch failed; continuing primary action: "
+                f"{dispatch_error}"
+            )
 
     # Maintenance actions are safe to execute late: they do not publish content
     # directly and already have idempotency/data-maturity guards of their own.
