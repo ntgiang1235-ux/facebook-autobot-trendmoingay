@@ -3,7 +3,8 @@ import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from app import readiness
+from app.readiness import ReadinessCheck, ReadinessResult
+from app.readiness_policy import apply_bootstrap_policy
 from app.strategy_guard import run_strategy_guard
 from app.strategy_models import AdaptiveConfig
 
@@ -15,84 +16,59 @@ PRIOR_START = RECENT_START - timedelta(days=7)
 
 
 class FinalReadinessClosureTests(unittest.TestCase):
-    def test_bootstrap_learning_is_ready_and_transparent(self):
-        config = AdaptiveConfig(
-            adaptive_enabled=True,
-            auto_schedule_enabled=True,
-            current_strategy_version=2,
-        )
-        stats = []
-
-        check = readiness._learning_check(config, stats)
-
-        self.assertEqual(check.status, "ready")
-        self.assertIn("bootstrap-safe", check.detail)
-        self.assertIn("category", check.detail)
-        self.assertIn("time_bucket", check.detail)
-
-    def test_missing_last_good_is_ready_only_while_learning_is_bootstrap_safe(self):
-        conn = sqlite3.connect(":memory:")
-        try:
-            conn.executescript(
-                """
-                CREATE TABLE strategy_versions (
-                    version_id INTEGER PRIMARY KEY,
-                    weights_json TEXT NOT NULL,
-                    config_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    reason TEXT NOT NULL,
-                    is_last_good INTEGER NOT NULL
-                );
-                CREATE TABLE strategy_stats (
-                    dimension TEXT NOT NULL,
-                    value TEXT NOT NULL,
-                    sample_count INTEGER NOT NULL,
-                    weighted_score_14d REAL NOT NULL,
-                    recent_score_7d REAL NOT NULL,
-                    success_rate REAL NOT NULL,
-                    current_weight REAL NOT NULL,
-                    last_used_at TEXT,
-                    status TEXT NOT NULL,
-                    cooldown_until TEXT,
-                    retest_after TEXT,
-                    updated_at TEXT NOT NULL
-                );
-                """
-            )
-            config = AdaptiveConfig(
-                adaptive_enabled=True,
-                auto_schedule_enabled=True,
-                current_strategy_version=2,
-                last_good_strategy_version=None,
-            )
-            conn.execute(
-                "INSERT INTO strategy_versions VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    2,
-                    json.dumps({"category": {"post": 1.0}}),
-                    json.dumps(config.to_dict()),
-                    NOW.isoformat(),
-                    "refresh",
-                    0,
+    def test_bootstrap_learning_and_missing_last_good_become_ready_but_transparent(self):
+        raw = ReadinessResult(
+            "degraded",
+            (
+                ReadinessCheck("schema", "ready", "ok"),
+                ReadinessCheck(
+                    "strategy_versions",
+                    "degraded",
+                    "current=v2; no proven last-good rollback target yet",
                 ),
-            )
-            for dimension, value in (("category", "post"), ("time_bucket", "08:30")):
-                conn.execute(
-                    "INSERT INTO strategy_stats VALUES (?, ?, 1, 50, 50, 0.5, 1, NULL, 'insufficient_data', NULL, NULL, ?)",
-                    (dimension, value, NOW.isoformat()),
-                )
-            conn.commit()
+                ReadinessCheck(
+                    "learning",
+                    "degraded",
+                    "insufficient mature learning for: category, time_bucket",
+                ),
+                ReadinessCheck("liveness", "ready", "healthy"),
+            ),
+        )
 
-            def execute(query, params=()):
-                return conn.execute(query, params).fetchall()
+        result = apply_bootstrap_policy(raw)
 
-            check = readiness._strategy_versions_check(execute, config)
+        self.assertEqual(result.status, "ready")
+        learning = next(item for item in result.checks if item.name == "learning")
+        versions = next(item for item in result.checks if item.name == "strategy_versions")
+        self.assertEqual(learning.status, "ready")
+        self.assertIn("bootstrap-safe", learning.detail)
+        self.assertIn("category, time_bucket", learning.detail)
+        self.assertEqual(versions.status, "ready")
+        self.assertIn("bootstrap-safe", versions.detail)
+        self.assertIn("no proven last-good", versions.detail)
 
-            self.assertEqual(check.status, "ready")
-            self.assertIn("bootstrap-safe", check.detail)
-            self.assertIn("no proven last-good", check.detail)
-        finally:
-            conn.close()
+    def test_mature_learning_does_not_hide_missing_last_good(self):
+        raw = ReadinessResult(
+            "degraded",
+            (
+                ReadinessCheck(
+                    "strategy_versions",
+                    "degraded",
+                    "current=v2; no proven last-good rollback target yet",
+                ),
+                ReadinessCheck(
+                    "learning",
+                    "ready",
+                    "category and time-bucket learning meet planner maturity thresholds",
+                ),
+            ),
+        )
+
+        result = apply_bootstrap_policy(raw)
+
+        self.assertEqual(result.status, "degraded")
+        versions = next(item for item in result.checks if item.name == "strategy_versions")
+        self.assertEqual(versions.status, "degraded")
 
     def test_healthy_guard_promotion_synchronizes_canonical_last_good_flag(self):
         conn = sqlite3.connect(":memory:")
