@@ -196,6 +196,26 @@ def run_strategy_guard(
 
     regression = 1.0 - (recent.average_score / prior.average_score)
     if regression <= ROLLBACK_REGRESSION:
+        promoted = replace(
+            config,
+            last_good_strategy_version=config.current_strategy_version,
+        )
+
+        def persist_last_good(transaction_execute):
+            transaction_execute(
+                """
+                UPDATE strategy_versions
+                SET is_last_good = CASE WHEN version_id = ? THEN 1 ELSE 0 END
+                """,
+                (config.current_strategy_version,),
+            )
+            save_config(transaction_execute, promoted)
+
+        if transaction_fn is None:
+            persist_last_good(execute_fn)
+        else:
+            transaction_fn(persist_last_good)
+
         if config.last_good_strategy_version == config.current_strategy_version:
             return StrategyGuardResult(
                 status="stable",
@@ -206,11 +226,6 @@ def run_strategy_guard(
                 last_good_version=config.last_good_strategy_version,
                 detail=f"strategy performance healthy: regression={regression:.1%}",
             )
-        promoted = replace(
-            config,
-            last_good_strategy_version=config.current_strategy_version,
-        )
-        save_config(execute_fn, promoted)
         return StrategyGuardResult(
             status="promoted_last_good",
             recent=recent,

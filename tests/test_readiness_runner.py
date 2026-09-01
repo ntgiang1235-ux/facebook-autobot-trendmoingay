@@ -31,6 +31,56 @@ class ReadinessRunnerTests(unittest.TestCase):
                 self.assertIn(f"PHASE_4_READINESS: {status.upper()}", output)
                 self.assertIn("[READY] schema — ok", output)
 
+    def test_runner_applies_bootstrap_policy_to_safe_learning_warmup(self):
+        result = ReadinessResult(
+            status="degraded",
+            checks=(
+                ReadinessCheck("schema", "ready", "ok"),
+                ReadinessCheck(
+                    "strategy_versions",
+                    "degraded",
+                    "current=v2; no proven last-good rollback target yet",
+                ),
+                ReadinessCheck(
+                    "learning",
+                    "degraded",
+                    "insufficient mature learning for: category, time_bucket",
+                ),
+                ReadinessCheck("liveness", "ready", "healthy"),
+            ),
+        )
+
+        code, output = self.run_main(result=result)
+
+        self.assertEqual(code, 0)
+        self.assertIn("PHASE_4_READINESS: READY", output)
+        self.assertIn("[READY] learning — bootstrap-safe", output)
+        self.assertIn("[READY] strategy_versions — current=v2; bootstrap-safe", output)
+
+    def test_bootstrap_policy_never_masks_failed_check(self):
+        result = ReadinessResult(
+            status="failed",
+            checks=(
+                ReadinessCheck("schema", "failed", "missing required table"),
+                ReadinessCheck(
+                    "strategy_versions",
+                    "degraded",
+                    "current=v2; no proven last-good rollback target yet",
+                ),
+                ReadinessCheck(
+                    "learning",
+                    "degraded",
+                    "insufficient mature learning for: category, time_bucket",
+                ),
+            ),
+        )
+
+        code, output = self.run_main(result=result)
+
+        self.assertEqual(code, 1)
+        self.assertIn("PHASE_4_READINESS: FAILED", output)
+        self.assertIn("[FAILED] schema — missing required table", output)
+
     def test_failed_exits_one(self):
         result = ReadinessResult(
             status="failed",
