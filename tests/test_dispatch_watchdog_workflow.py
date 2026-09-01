@@ -16,6 +16,10 @@ class DispatchWatchdogWorkflowTests(unittest.TestCase):
         self.assertNotIn('python hardening_runner.py "planner"', text)
         self.assertNotIn('ACTION=', text)
 
+    def test_watchdog_does_not_inherit_primary_schedule_staleness_gate(self):
+        text = self.path.read_text(encoding='utf-8')
+        self.assertNotIn('SCHEDULED_CRON:', text)
+
     def test_watchdog_has_required_runtime_secrets(self):
         text = self.path.read_text(encoding='utf-8')
         for secret in (
