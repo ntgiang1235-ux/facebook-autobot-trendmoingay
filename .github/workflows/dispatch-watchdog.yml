@@ -1,0 +1,51 @@
+name: Dispatch Watchdog
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Independent fallback wake, offset 15 minutes from the primary :07/:37 dispatcher.
+    # Turso daily_plan remains the only scheduling authority; this only wakes dispatch.
+    - cron: "22,52 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: facebook-autobot-dispatch-watchdog
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      TZ: Asia/Ho_Chi_Minh
+      GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+      FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
+      FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      BLACKLIST_WORDS: ${{ secrets.BLACKLIST_WORDS }}
+      AFFILIATE_LINK: ${{ secrets.AFFILIATE_LINK }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run dispatch watchdog
+        run: python hardening_runner.py "dispatch"
