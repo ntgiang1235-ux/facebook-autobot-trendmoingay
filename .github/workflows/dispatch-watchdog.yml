@@ -21,7 +21,6 @@ jobs:
 
     env:
       TZ: Asia/Ho_Chi_Minh
-      SCHEDULED_CRON: ${{ github.event.schedule }}
       GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
       FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
       FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
