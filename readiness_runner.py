@@ -1,5 +1,6 @@
 from app.readiness import run_readiness
 from app.readiness_db import execute_read
+from app.readiness_policy import apply_bootstrap_policy
 
 
 def format_result(result) -> str:
@@ -13,7 +14,7 @@ def format_result(result) -> str:
 
 def main() -> int:
     try:
-        result = run_readiness(execute_read)
+        result = apply_bootstrap_policy(run_readiness(execute_read))
     except Exception as error:
         print("PHASE_4_READINESS: FAILED")
         print(f"[FAILED] dependency — {error}")
